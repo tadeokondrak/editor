@@ -130,8 +130,8 @@ impl Edot {
         )?;
         self.register::<Quit>("q")
             .register::<Quit>("quit")
-            .register::<Open>("o")
-            .register::<Open>("open");
+            .register::<Edit>("e")
+            .register::<Edit>("edit");
         loop {
             self.draw()?;
             match self.main() {
@@ -315,17 +315,14 @@ impl Edot {
                     trace!("command: {:?}", command);
                     let command = command.iter().map(|x| &**x).collect::<Vec<&str>>();
                     self.cmd(&command)?;
-                    self.damage(Damage::Statusline);
                 }
                 Event::Key(Key::Char(c)) => {
                     self.windows[self.focused].command.push(c);
-                    self.damage(Damage::Statusline);
                 }
                 Event::Key(Key::Backspace) => {
                     if self.windows[self.focused].command.pop().is_none() {
                         self.set_mode(self.focused, Mode::Normal);
                     } else {
-                        self.damage(Damage::Statusline);
                     }
                 }
                 _ => {}
@@ -337,7 +334,7 @@ impl Edot {
     fn signal(&mut self, signal: c_int) {
         info!("received signal: {}", signal);
         match signal {
-            signal_hook::SIGWINCH => self.damage(Damage::Full),
+            signal_hook::SIGWINCH => self.draw()?,
             _ => {}
         }
     }
@@ -345,33 +342,31 @@ impl Edot {
     #[throws]
     fn draw(&mut self) {
         let (width, height) = terminal_size()?;
-        if self.tabline_dirty {
-            let region = Rect {
-                start: Point { x: 1, y: 1 },
-                end: Point { x: width, y: 1 },
-            };
-            self.draw_tabs(region)?;
-        }
-        if self.editor_dirty {
-            let region = Rect {
-                start: Point { x: 1, y: 2 },
-                end: Point {
-                    x: width,
-                    y: height - 1,
-                },
-            };
-            self.draw_window(self.focused, region)?;
-        }
-        if self.statusline_dirty {
-            let region = Rect {
-                start: Point { x: 1, y: height },
-                end: Point {
-                    x: width,
-                    y: height,
-                },
-            };
-            self.draw_status(region)?;
-        }
+
+        let region = Rect {
+            start: Point { x: 1, y: 1 },
+            end: Point { x: width, y: 1 },
+        };
+        self.draw_tabs(region)?;
+
+        let region = Rect {
+            start: Point { x: 1, y: 2 },
+            end: Point {
+                x: width,
+                y: height - 1,
+            },
+        };
+        self.draw_window(self.focused, region)?;
+
+        let region = Rect {
+            start: Point { x: 1, y: height },
+            end: Point {
+                x: width,
+                y: height,
+            },
+        };
+        self.draw_status(region)?;
+
         self.output.flush()?;
     }
 
@@ -470,29 +465,8 @@ impl Edot {
         }
     }
 
-    pub fn damage(&mut self, damage: Damage) {
-        trace!("damage: {:?}", damage);
-        match damage {
-            Damage::Full => {
-                self.tabline_dirty = true;
-                self.editor_dirty = true;
-                self.statusline_dirty = true;
-            }
-            Damage::Editor => {
-                self.editor_dirty = true;
-            }
-            Damage::Tabline => {
-                self.tabline_dirty = true;
-            }
-            Damage::Statusline => {
-                self.statusline_dirty = true;
-            }
-        }
-    }
-
     pub fn show_message(&mut self, importance: Importance, message: String) {
         self.message = Some((importance, message));
-        self.damage(Damage::Statusline);
     }
 
     pub fn quit(&mut self) {
@@ -508,7 +482,6 @@ impl Edot {
             Mode::Goto { .. } => {}
             Mode::Command => {}
         }
-        self.damage(Damage::Statusline);
     }
 
     pub fn selections(&self, window: WindowId) -> impl Iterator<Item = SelectionId> {
@@ -521,7 +494,6 @@ impl Edot {
         let buffer = &mut self.buffers[window.buffer];
         let selection = &mut window.selections[selection_id];
         selection.start.insert_char(&mut buffer.content, c);
-        self.damage(Damage::Editor);
     }
 
     pub fn insert_char_after(&mut self, window_id: WindowId, selection_id: SelectionId, c: char) {
@@ -529,7 +501,6 @@ impl Edot {
         let buffer = &mut self.buffers[window.buffer];
         let selection = &mut window.selections[selection_id];
         selection.end.insert_char(&mut buffer.content, c);
-        self.damage(Damage::Editor);
     }
 
     #[throws(MovementError)]
@@ -547,7 +518,6 @@ impl Edot {
         if !drag {
             selection.start = selection.end;
         }
-        self.damage(Damage::Editor);
     }
 
     #[throws(MovementError)]
@@ -569,7 +539,6 @@ impl Edot {
         let selection = &mut window.selections[selection_id];
         selection.start.move_to(&buffer.content, movement)?;
         selection.end.move_to(&buffer.content, movement)?;
-        self.damage(Damage::Editor);
     }
 
     #[throws(MovementError)]
@@ -671,15 +640,6 @@ pub enum Mode {
     Command,
 }
 
-// TODO this sucks
-#[derive(Debug, Copy, Clone)]
-pub enum Damage {
-    Full,
-    Editor,
-    Tabline,
-    Statusline,
-}
-
 #[derive(Debug, Copy, Clone)]
 pub enum Importance {
     Error,
@@ -724,9 +684,9 @@ impl Command for Quit {
     }
 }
 
-enum Open {}
+enum Edit {}
 
-impl Command for Open {
+impl Command for Edit {
     const DESCRIPTION: &'static str = "open a file";
     const REQUIRED_ARGUMENTS: usize = 1;
 
@@ -764,6 +724,5 @@ impl Command for Open {
         let window_id = WindowId(cx.editor.windows.len());
         cx.editor.windows.push(window);
         cx.editor.focused = window_id;
-        cx.editor.damage(Damage::Tabline);
     }
 }

@@ -129,12 +129,12 @@ impl Edot {
             cursor::Hide,
             cursor::SteadyBar
         )?;
-        self.register::<Quit>("q")
-            .register::<Quit>("quit")
-            .register::<Edit>("e")
-            .register::<Edit>("edit")
-            .register::<Write>("w")
-            .register::<Write>("write");
+        self.register::<QuitCmd>("q")
+            .register::<QuitCmd>("quit")
+            .register::<EditCmd>("e")
+            .register::<EditCmd>("edit")
+            .register::<WriteCmd>("w")
+            .register::<WriteCmd>("write");
         loop {
             self.draw()?;
             match self.main() {
@@ -829,9 +829,9 @@ impl CommandDesc {
     }
 }
 
-enum Quit {}
+enum QuitCmd {}
 
-impl Command for Quit {
+impl Command for QuitCmd {
     const DESCRIPTION: &'static str = "quits the editor";
 
     fn run(cx: Context, _args: &[&str]) -> Result {
@@ -840,9 +840,9 @@ impl Command for Quit {
     }
 }
 
-enum Edit {}
+enum EditCmd {}
 
-impl Command for Edit {
+impl Command for EditCmd {
     const DESCRIPTION: &'static str = "open a file";
     const REQUIRED_ARGUMENTS: usize = 1;
 
@@ -883,9 +883,9 @@ impl Command for Edit {
     }
 }
 
-enum Write {}
+enum WriteCmd {}
 
-impl Command for Write {
+impl Command for WriteCmd {
     const DESCRIPTION: &'static str = "write the current buffer contents to disk";
 
     fn run(cx: Context, _args: &[&str]) -> Result {

@@ -476,18 +476,28 @@ impl Edot {
                     if c == '\n' {
                         c = ' ';
                     }
-                    // TODO: special case tab rendering
                     if window
                         .selections
                         .iter()
                         .map(|s| s.valid(&buffer.content))
                         .any(|s| s.contains(pos))
                     {
-                        write!(self.output, "{}{}{}", style::Invert, c, style::Reset)?;
+                        if c == '\t' {
+                            write!(self.output, "{}    {}", style::Invert, style::Reset)?;
+                            col += 4;
+                        } else {
+                            write!(self.output, "{}{}{}", style::Invert, c, style::Reset)?;
+                            col += 1;
+                        }
                     } else {
-                        write!(self.output, "{}", c)?;
+                        if c == '\t' {
+                            write!(self.output, "    ")?;
+                            col += 4;
+                        } else {
+                            write!(self.output, "{}", c)?;
+                            col += 1;
+                        }
                     }
-                    col += 1;
                 }
             }
         }

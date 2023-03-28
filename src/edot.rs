@@ -13,8 +13,8 @@ use signal_hook::{iterator::Signals, SIGWINCH};
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
-    fs::File,
-    io::{self, Write},
+    fs::{File, OpenOptions},
+    io::{self, Write as _},
     mem::take,
     os::raw::c_int,
     path::PathBuf,
@@ -128,7 +128,9 @@ impl Edot {
         self.register::<Quit>("q")
             .register::<Quit>("quit")
             .register::<Edit>("e")
-            .register::<Edit>("edit");
+            .register::<Edit>("edit")
+            .register::<Write>("w")
+            .register::<Write>("write");
         loop {
             self.draw()?;
             match self.main() {
@@ -728,6 +730,23 @@ impl Command for Edit {
         let window_id = WindowId(cx.editor.windows.len());
         cx.editor.windows.push(window);
         cx.editor.focused = window_id;
+        Ok(())
+    }
+}
+
+enum Write {}
+
+impl Command for Write {
+    const DESCRIPTION: &'static str = "write the current buffer contents to disk";
+
+    fn run(cx: Context, _args: &[&str]) -> Result {
+        let buffer = &cx.editor.buffers[cx.editor.windows[cx.window].buffer];
+        let path = buffer
+            .path
+            .as_ref()
+            .context("cannot save a scratch buffer")?;
+        let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
+        buffer.content.write_to(&mut file)?;
         Ok(())
     }
 }

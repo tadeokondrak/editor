@@ -481,7 +481,7 @@ impl Edot {
         {
             let first_visible_line = window.top;
             let last_visible_line = window.top + usize::from(region.height());
-            let main_selection = window.selections.first().unwrap();
+            let main_selection = window.selections[SelectionId::PRIMARY];
             if main_selection.end.line < first_visible_line {
                 window.top = main_selection.end.line;
             } else if main_selection.end.line > last_visible_line {
@@ -707,6 +707,10 @@ pub struct Window {
 }
 
 id!(SelectionId);
+
+impl SelectionId {
+    const PRIMARY: Self = Self(0);
+}
 
 pub struct Buffer {
     path: Option<PathBuf>,

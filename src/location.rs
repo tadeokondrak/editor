@@ -1,3 +1,4 @@
+use crate::edot::{Buffer, Edit};
 use ropey::{Rope, RopeSlice};
 use std::{
     mem::swap,
@@ -90,8 +91,8 @@ impl Line {
         rope.line_to_char(self.zero_based())
     }
 
-    pub fn remove_from(self, rope: &mut Rope) {
-        rope.remove(self.range_of(rope))
+    pub fn remove_from(self, _buffer: &mut Buffer) {
+        todo!()
     }
 
     pub fn is_first(self) -> bool {
@@ -125,6 +126,13 @@ pub struct Position {
 }
 
 impl Position {
+    pub fn file_start() -> Self {
+        Self {
+            line: Line::from_one_based(1),
+            column: Column::from_one_based(1),
+        }
+    }
+
     pub fn char_of(self, rope: &Rope) -> usize {
         self.line.char_of(rope) + self.column.zero_based()
     }
@@ -137,8 +145,8 @@ impl Position {
         self.line.slice_of(rope).len_chars() == self.column.zero_based()
     }
 
-    pub fn insert_char(self, rope: &mut Rope, c: char) {
-        rope.insert_char(self.char_of(rope), c)
+    pub fn insert_char(self, buffer: &mut Buffer, c: char) {
+        buffer.history.insert_char(&mut buffer.content, self, c);
     }
 
     pub fn validate(&mut self, rope: &Rope) {
@@ -159,20 +167,20 @@ impl Position {
         }
     }
 
-    pub fn validate_fix(&mut self, rope: &mut Rope) {
-        if !self.is_valid(rope) {
-            if self.line.is_empty(rope) {
+    pub fn validate_fix(&mut self, buffer: &mut Buffer) {
+        if !self.is_valid(&buffer.content) {
+            if self.line.is_empty(&buffer.content) {
                 if !self.line.is_first() {
-                    self.move_to(rope, Movement::Up(1)).unwrap();
-                    self.move_to(rope, Movement::LineEnd).unwrap();
+                    self.move_to(&buffer.content, Movement::Up(1)).unwrap();
+                    self.move_to(&buffer.content, Movement::LineEnd).unwrap();
                 } else {
-                    assert_eq!(rope.len_chars(), 0);
+                    assert_eq!(buffer.content.len_chars(), 0);
                     self.line = Line::from_one_based(1);
                     self.column = Column::from_one_based(1);
-                    rope.insert_char(0, '\n');
+                    self.insert_char(buffer, '\n');
                 }
             } else {
-                self.move_to(rope, Movement::LineEnd).unwrap();
+                self.move_to(&buffer.content, Movement::LineEnd).unwrap();
             }
         }
     }
@@ -334,17 +342,17 @@ impl Selection {
         self.end.validate(rope);
     }
 
-    pub fn validate_fix(&mut self, rope: &mut Rope) {
-        self.start.validate_fix(rope);
-        self.end.validate_fix(rope);
+    pub fn validate_fix(&mut self, buffer: &mut Buffer) {
+        self.start.validate_fix(buffer);
+        self.end.validate_fix(buffer);
     }
 
-    pub fn remove_from(&mut self, rope: &mut Rope) {
-        self.validate(rope);
+    pub fn remove_from(&mut self, buffer: &mut Buffer) {
+        self.validate(&buffer.content);
         self.order();
-        rope.remove(self.range_of(rope));
+        buffer.history.remove_selection(&mut buffer.content, *self);
         self.end = self.start;
-        self.validate_fix(rope);
+        self.validate_fix(buffer);
         // TODO: the file must be terminated by a final newline
     }
 }

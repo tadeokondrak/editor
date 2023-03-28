@@ -5,7 +5,7 @@ use crate::{
     Result,
 };
 use anyhow::{format_err, Context as _};
-use crossbeam_channel::{select, unbounded, Receiver, Sender};
+use crossbeam_channel::{select, unbounded, Receiver, Select, Sender};
 use log::{error, info, trace};
 use ropey::Rope;
 use shlex::split as shlex;
@@ -105,7 +105,7 @@ impl Edot {
             buffers: vec![Buffer {
                 content: Rope::from("\n"),
                 name: String::from("scratch"),
-                history: VecDeque::new(),
+                history: History::new(),
                 path: None,
             }]
             .into(),
@@ -341,6 +341,9 @@ impl Edot {
                 }
                 Event::Key(Key::Char('d')) => {
                     self.delete_selections(self.focused);
+                }
+                Event::Key(Key::Char('u')) => {
+                    self.undo(self.focused);
                 }
                 _ => {}
             },
@@ -630,14 +633,14 @@ impl Edot {
         let window = &mut self.windows[window_id];
         let buffer = &mut self.buffers[window.buffer];
         let selection = &mut window.selections[selection_id];
-        selection.start.insert_char(&mut buffer.content, c);
+        selection.start.insert_char(buffer, c);
     }
 
     pub fn insert_char_after(&mut self, window_id: WindowId, selection_id: SelectionId, c: char) {
         let window = &mut self.windows[window_id];
         let buffer = &mut self.buffers[window.buffer];
         let selection = &mut window.selections[selection_id];
-        selection.end.insert_char(&mut buffer.content, c);
+        selection.end.insert_char(buffer, c);
     }
 
     pub fn move_selection(
@@ -698,7 +701,7 @@ impl Edot {
         let window = &mut self.windows[window_id];
         let buffer = &mut self.buffers[window.buffer];
         let selection = &mut window.selections[selection_id];
-        selection.remove_from(&mut buffer.content);
+        selection.remove_from(buffer);
     }
 
     pub fn delete_selections(&mut self, window_id: WindowId) {
@@ -743,6 +746,26 @@ impl Edot {
         }
         errors.pop().map_or(Ok(()), Err)
     }
+
+    pub fn undo(&mut self, window_id: WindowId) {
+        let window = &mut self.windows[window_id];
+        let buffer = &mut self.buffers[window.buffer];
+        match buffer.history.undo(&mut buffer.content) {
+            Ok(()) => {
+                self.for_each_selection(window_id, |this, window, selection| {
+                    let window = &mut this.windows[window];
+                    let selection = &mut window.selections[selection];
+                    let buffer = &mut this.buffers[window.buffer];
+                    selection.validate(&buffer.content);
+                    Ok(())
+                })
+                .unwrap();
+            }
+            Err(NothingLeftToUndo) => {
+                self.show_message(Importance::Error, "nothing left to undo".into());
+            }
+        }
+    }
 }
 
 impl Drop for Edot {
@@ -772,14 +795,68 @@ impl SelectionId {
 }
 
 pub struct Buffer {
-    path: Option<PathBuf>,
-    name: String,
-    content: Rope,
-    history: VecDeque<Modification>,
+    pub path: Option<PathBuf>,
+    pub name: String,
+    pub content: Rope,
+    pub history: History,
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum Modification {}
+pub struct NothingLeftToUndo;
+
+pub struct History {
+    edits: VecDeque<Edit>,
+}
+
+impl History {
+    pub fn new() -> Self {
+        Self {
+            edits: VecDeque::new(),
+        }
+    }
+
+    pub fn insert_char(&mut self, rope: &mut Rope, pos: Position, c: char) {
+        rope.insert_char(pos.char_of(rope), c);
+        self.push_back(Edit::Insert {
+            pos,
+            text: c.to_string(),
+        });
+    }
+
+    pub fn remove_selection(&mut self, rope: &mut Rope, sel: Selection) {
+        let text = sel.slice_of(rope).to_string();
+        rope.remove(sel.range_of(rope));
+        self.push_back(Edit::Delete {
+            pos: sel.start,
+            text,
+        });
+    }
+
+    pub fn undo(&mut self, rope: &mut Rope) -> Result<(), NothingLeftToUndo> {
+        let edit = self.edits.pop_back().ok_or(NothingLeftToUndo)?;
+        trace!("undoing edit: {:?}", edit);
+        match edit {
+            Edit::Insert { pos, text } => {
+                rope.remove(pos.char_of(rope)..pos.char_of(rope) + text.len());
+                Ok(())
+            }
+            Edit::Delete { pos, text } => {
+                rope.insert(pos.char_of(rope), &text);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn push_back(&mut self, edit: Edit) {
+        trace!("pushing edit: {:?}", edit);
+        self.edits.push_back(edit);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Edit {
+    Insert { pos: Position, text: String },
+    Delete { pos: Position, text: String },
+}
 
 #[derive(Debug, Copy, Clone)]
 pub enum Mode {
@@ -848,7 +925,7 @@ impl Command for EditCmd {
             path: Some(path),
             name,
             content: Rope::from_reader(reader)?,
-            history: VecDeque::new(),
+            history: History::new(),
         };
         let buffer_id = BufferId(cx.editor.buffers.len());
         cx.editor.buffers.push(buffer);

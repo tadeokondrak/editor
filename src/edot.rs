@@ -441,7 +441,7 @@ impl Edot {
                         column: Column::from_zero_based(file_col),
                     };
                     if c == '\n' {
-                        c = '␤';
+                        c = ' ';
                     }
                     // TODO: special case tab rendering
                     if window

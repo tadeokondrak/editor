@@ -21,7 +21,9 @@ use std::{
     thread,
 };
 use termion::{
-    clear, color, cursor,
+    clear,
+    color::{self, Color},
+    cursor,
     event::{Event, Key},
     get_tty,
     input::TermRead,
@@ -393,12 +395,20 @@ impl Edot {
             )?;
         } else {
             let mode = self.windows[self.focused].mode;
+            let color: &dyn Color = match mode {
+                Mode::Normal => &color::White,
+                Mode::Insert => &color::LightYellow,
+                Mode::Append => &color::White,
+                Mode::Goto { .. } => &color::White,
+                Mode::Command => &color::White,
+            };
             write!(
                 self.output,
-                "{}{}{} {:?} {}",
+                "{}{}{}{} {:?} {}",
                 region.start.goto(),
                 clear::CurrentLine,
                 style::Invert,
+                color::Fg(color),
                 mode,
                 style::Reset,
             )?;

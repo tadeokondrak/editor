@@ -296,6 +296,26 @@ impl Edot {
                 Event::Key(Key::Char('d')) => {
                     self.delete_selections(self.focused);
                 }
+                Event::Key(Key::Ctrl('u')) => {
+                    if let Some(height) = self.last_screen_height {
+                        self.move_selection(
+                            self.focused,
+                            SelectionId(0),
+                            Movement::Up(usize::from(height / 2)),
+                            false,
+                        )?;
+                    }
+                }
+                Event::Key(Key::Ctrl('d')) => {
+                    if let Some(height) = self.last_screen_height {
+                        self.move_selection(
+                            self.focused,
+                            SelectionId(0),
+                            Movement::Down(usize::from(height / 2)),
+                            false,
+                        )?;
+                    }
+                }
                 _ => {}
             },
             Mode::Goto { drag } => {

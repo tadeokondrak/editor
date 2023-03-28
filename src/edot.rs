@@ -330,12 +330,18 @@ impl Edot {
                                 )?;
                             }
                             Mode::Append => {
-                                self.move_selection(
+                                match self.move_selection(
                                     self.focused,
                                     selection_id,
                                     Movement::Right(1),
                                     true,
-                                )?;
+                                ) {
+                                    Ok(()) | Err(MovementError::NoNextLine) => {
+                                        // Ignore the error here so we can add a newline at the end of a
+                                        // file even if there isn't one there already.
+                                    }
+                                    Err(e) => return Err(e.into()),
+                                }
                                 self.insert_char_after(self.focused, selection_id, c);
                             }
                             _ => unreachable!(),

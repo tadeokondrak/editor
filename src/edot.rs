@@ -201,6 +201,46 @@ impl Edot {
                     Event::Key(Key::Right) => {
                         self.move_selections(self.focused, Movement::Right(1), false)?;
                     }
+                    Event::Key(Key::Ctrl('u')) => {
+                        if let Some(height) = self.last_screen_height {
+                            self.move_selection(
+                                self.focused,
+                                SelectionId::PRIMARY,
+                                Movement::Up(usize::from(height / 2)),
+                                false,
+                            )?;
+                        }
+                    }
+                    Event::Key(Key::Ctrl('d')) => {
+                        if let Some(height) = self.last_screen_height {
+                            self.move_selection(
+                                self.focused,
+                                SelectionId::PRIMARY,
+                                Movement::Down(usize::from(height / 2)),
+                                false,
+                            )?;
+                        }
+                    }
+                    Event::Key(Key::Ctrl('b') | Key::PageUp) => {
+                        if let Some(height) = self.last_screen_height {
+                            self.move_selection(
+                                self.focused,
+                                SelectionId::PRIMARY,
+                                Movement::Up(usize::from(height)),
+                                false,
+                            )?;
+                        }
+                    }
+                    Event::Key(Key::Ctrl('f') | Key::PageDown) => {
+                        if let Some(height) = self.last_screen_height {
+                            self.move_selection(
+                                self.focused,
+                                SelectionId::PRIMARY,
+                                Movement::Down(usize::from(height)),
+                                false,
+                            )?;
+                        }
+                    }
                     Event::Key(Key::Ctrl('p')) => {
                         self.focused = WindowId((self.focused.0 - 1) % self.windows.len());
                     }
@@ -301,46 +341,6 @@ impl Edot {
                 }
                 Event::Key(Key::Char('d')) => {
                     self.delete_selections(self.focused);
-                }
-                Event::Key(Key::Ctrl('u')) => {
-                    if let Some(height) = self.last_screen_height {
-                        self.move_selection(
-                            self.focused,
-                            SelectionId(0),
-                            Movement::Up(usize::from(height / 2)),
-                            false,
-                        )?;
-                    }
-                }
-                Event::Key(Key::Ctrl('d')) => {
-                    if let Some(height) = self.last_screen_height {
-                        self.move_selection(
-                            self.focused,
-                            SelectionId(0),
-                            Movement::Down(usize::from(height / 2)),
-                            false,
-                        )?;
-                    }
-                }
-                Event::Key(Key::Ctrl('b') | Key::PageUp) => {
-                    if let Some(height) = self.last_screen_height {
-                        self.move_selection(
-                            self.focused,
-                            SelectionId(0),
-                            Movement::Up(usize::from(height)),
-                            false,
-                        )?;
-                    }
-                }
-                Event::Key(Key::Ctrl('f') | Key::PageDown) => {
-                    if let Some(height) = self.last_screen_height {
-                        self.move_selection(
-                            self.focused,
-                            SelectionId(0),
-                            Movement::Down(usize::from(height)),
-                            false,
-                        )?;
-                    }
                 }
                 _ => {}
             },

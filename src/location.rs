@@ -145,7 +145,7 @@ impl Position {
         if !self.is_valid(rope) {
             if self.line.is_empty(rope) {
                 if !self.line.is_first() {
-                    self.move_to(rope, Movement::Up).unwrap();
+                    self.move_to(rope, Movement::Up(1)).unwrap();
                     self.move_to(rope, Movement::LineEnd).unwrap();
                 } else {
                     assert_eq!(rope.len_chars(), 0);
@@ -163,7 +163,7 @@ impl Position {
         if !self.is_valid(rope) {
             if self.line.is_empty(rope) {
                 if !self.line.is_first() {
-                    self.move_to(rope, Movement::Up).unwrap();
+                    self.move_to(rope, Movement::Up(1)).unwrap();
                     self.move_to(rope, Movement::LineEnd).unwrap();
                 } else {
                     assert_eq!(rope.len_chars(), 0);
@@ -179,39 +179,65 @@ impl Position {
 
     pub fn move_to(&mut self, rope: &Rope, movement: Movement) -> Result<(), MovementError> {
         match movement {
-            Movement::Left => {
-                self.validate(rope);
-                if self.column.is_first() {
-                    if !self.line.is_first() {
-                        self.move_to(rope, Movement::Up)?;
-                        self.move_to(rope, Movement::LineEnd)?;
+            Movement::Left(n) => {
+                // TODO: remove the loop
+                let mut moved = false;
+                for _ in 0..n {
+                    self.validate(rope);
+                    if self.column.is_first() {
+                        if !self.line.is_first() {
+                            self.move_to(rope, Movement::Up(1))?;
+                            self.move_to(rope, Movement::LineEnd)?;
+                            moved = true;
+                        } else {
+                            return Err(MovementError::NoPrevLine);
+                        }
                     } else {
-                        return Err(MovementError::NoPrevLine);
+                        self.column -= 1;
+                        moved = true;
                     }
-                } else {
-                    self.column -= 1;
                 }
-            }
-            Movement::Right => {
-                self.validate(rope);
-                if self.column.one_based() == self.line.slice_of(rope).len_chars() {
-                    self.move_to(rope, Movement::Down)?;
-                    self.move_to(rope, Movement::LineStart)?;
-                } else {
-                    self.column += 1;
-                }
-            }
-            Movement::Up => {
-                if self.line.is_first() {
+                if !moved {
                     return Err(MovementError::NoPrevLine);
-                } else {
-                    self.line -= 1;
                 }
             }
-            Movement::Down => {
-                if !self.line.is_last(rope) && (self.line + 1).slice_of(rope).len_chars() > 0 {
-                    self.line += 1;
-                } else {
+            Movement::Right(n) => {
+                // TODO: remove the loop
+                let mut moved = false;
+                for _ in 0..n {
+                    self.validate(rope);
+                    if self.column.one_based() == self.line.slice_of(rope).len_chars() {
+                        self.move_to(rope, Movement::Down(1))?;
+                        self.move_to(rope, Movement::LineStart)?;
+                        moved = true;
+                    } else {
+                        self.column += 1;
+                        moved = true;
+                    }
+                }
+                if !moved {
+                    return Err(MovementError::NoNextLine);
+                }
+            }
+            Movement::Up(n) => {
+                let n = n.min(self.line.zero_based());
+                if n == 0 {
+                    return Err(MovementError::NoPrevLine);
+                }
+                self.line -= n;
+            }
+            Movement::Down(n) => {
+                // TODO: remove the loop
+                let mut moved = false;
+                for _ in 0..n {
+                    if !self.line.is_last(rope) && (self.line + 1).slice_of(rope).len_chars() > 0 {
+                        self.line += 1;
+                        moved = true;
+                    } else {
+                        break;
+                    }
+                }
+                if !moved {
                     return Err(MovementError::NoNextLine);
                 }
             }
@@ -313,10 +339,10 @@ impl Selection {
 
 #[derive(Debug, Copy, Clone)]
 pub enum Movement {
-    Left,
-    Right,
-    Up,
-    Down,
+    Left(usize),
+    Right(usize),
+    Up(usize),
+    Down(usize),
     LineStart,
     LineEnd,
     FileStart,

@@ -188,29 +188,29 @@ impl Edot {
             if let Mode::Normal | Mode::Insert | Mode::Append = self.windows[self.focused].mode {
                 match event {
                     Event::Key(Key::Left) => {
-                        self.move_selections(self.focused, Movement::Left, false)?;
+                        self.move_selections(self.focused, Movement::Left(1), false)?;
                     }
                     Event::Key(Key::Down) => {
-                        self.move_selections(self.focused, Movement::Down, false)?;
+                        self.move_selections(self.focused, Movement::Down(1), false)?;
                     }
                     Event::Key(Key::Up) => {
-                        self.move_selections(self.focused, Movement::Up, false)?;
+                        self.move_selections(self.focused, Movement::Up(1), false)?;
                     }
                     Event::Key(Key::Right) => {
-                        self.move_selections(self.focused, Movement::Right, false)?;
+                        self.move_selections(self.focused, Movement::Right(1), false)?;
                     }
                     Event::Unsupported(keys) => match keys.as_slice() {
                         SHIFT_LEFT => {
-                            self.move_selections(self.focused, Movement::Left, true)?;
+                            self.move_selections(self.focused, Movement::Left(1), true)?;
                         }
                         SHIFT_DOWN => {
-                            self.move_selections(self.focused, Movement::Down, true)?;
+                            self.move_selections(self.focused, Movement::Down(1), true)?;
                         }
                         SHIFT_UP => {
-                            self.move_selections(self.focused, Movement::Up, true)?;
+                            self.move_selections(self.focused, Movement::Up(1), true)?;
                         }
                         SHIFT_RIGHT => {
-                            self.move_selections(self.focused, Movement::Right, true)?;
+                            self.move_selections(self.focused, Movement::Right(1), true)?;
                         }
                         _ => {}
                     },
@@ -242,7 +242,7 @@ impl Edot {
                     for selection_id in self.selections(self.focused) {
                         self.move_selection(self.focused, selection_id, Movement::LineEnd, false)?;
                         self.insert_char_after(self.focused, selection_id, '\n');
-                        self.move_selection(self.focused, selection_id, Movement::Down, false)?;
+                        self.move_selection(self.focused, selection_id, Movement::Down(1), false)?;
                         self.move_selection(
                             self.focused,
                             selection_id,
@@ -268,28 +268,28 @@ impl Edot {
                     self.set_mode(self.focused, Mode::Command);
                 }
                 Event::Key(Key::Char('h')) => {
-                    self.move_selections(self.focused, Movement::Left, false)?;
+                    self.move_selections(self.focused, Movement::Left(1), false)?;
                 }
                 Event::Key(Key::Char('j')) => {
-                    self.move_selections(self.focused, Movement::Down, false)?;
+                    self.move_selections(self.focused, Movement::Down(1), false)?;
                 }
                 Event::Key(Key::Char('k')) => {
-                    self.move_selections(self.focused, Movement::Up, false)?;
+                    self.move_selections(self.focused, Movement::Up(1), false)?;
                 }
                 Event::Key(Key::Char('l')) => {
-                    self.move_selections(self.focused, Movement::Right, false)?;
+                    self.move_selections(self.focused, Movement::Right(1), false)?;
                 }
                 Event::Key(Key::Char('H')) => {
-                    self.move_selections(self.focused, Movement::Left, true)?;
+                    self.move_selections(self.focused, Movement::Left(1), true)?;
                 }
                 Event::Key(Key::Char('J')) => {
-                    self.move_selections(self.focused, Movement::Down, true)?;
+                    self.move_selections(self.focused, Movement::Down(1), true)?;
                 }
                 Event::Key(Key::Char('K')) => {
-                    self.move_selections(self.focused, Movement::Up, true)?;
+                    self.move_selections(self.focused, Movement::Up(1), true)?;
                 }
                 Event::Key(Key::Char('L')) => {
-                    self.move_selections(self.focused, Movement::Right, true)?;
+                    self.move_selections(self.focused, Movement::Right(1), true)?;
                 }
                 Event::Key(Key::Char('d')) => {
                     self.delete_selections(self.focused);
@@ -321,13 +321,17 @@ impl Edot {
                         match mode {
                             Mode::Insert => {
                                 self.insert_char_before(self.focused, selection_id, c);
-                                self.shift_selection(self.focused, selection_id, Movement::Right)?;
+                                self.shift_selection(
+                                    self.focused,
+                                    selection_id,
+                                    Movement::Right(1),
+                                )?;
                             }
                             Mode::Append => {
                                 self.move_selection(
                                     self.focused,
                                     selection_id,
-                                    Movement::Right,
+                                    Movement::Right(1),
                                     true,
                                 )?;
                                 self.insert_char_after(self.focused, selection_id, c);
@@ -337,7 +341,7 @@ impl Edot {
                     }
                 }
                 Event::Key(Key::Backspace) => {
-                    self.move_selections(self.focused, Movement::Left, false)?;
+                    self.move_selections(self.focused, Movement::Left(1), false)?;
                     self.delete_selections(self.focused);
                 }
                 _ => {}

@@ -753,7 +753,7 @@ impl Edot {
 
 impl Drop for Edot {
     fn drop(&mut self) {
-        let _ = write!(
+        _ = write!(
             self.output,
             "{}{}{}",
             cursor::Show,

@@ -184,6 +184,42 @@ impl Edot {
         const SHIFT_RIGHT: &[u8] = &[27, 91, 49, 59, 50, 67];
         const SHIFT_LEFT: &[u8] = &[27, 91, 49, 59, 50, 68];
 
+        'arrows: {
+            if let Mode::Normal | Mode::Insert | Mode::Append = self.windows[self.focused].mode {
+                match event {
+                    Event::Key(Key::Left) => {
+                        self.move_selections(self.focused, Movement::Left, false)?;
+                    }
+                    Event::Key(Key::Down) => {
+                        self.move_selections(self.focused, Movement::Down, false)?;
+                    }
+                    Event::Key(Key::Up) => {
+                        self.move_selections(self.focused, Movement::Up, false)?;
+                    }
+                    Event::Key(Key::Right) => {
+                        self.move_selections(self.focused, Movement::Right, false)?;
+                    }
+                    Event::Unsupported(keys) => match keys.as_slice() {
+                        SHIFT_LEFT => {
+                            self.move_selections(self.focused, Movement::Left, true)?;
+                        }
+                        SHIFT_DOWN => {
+                            self.move_selections(self.focused, Movement::Down, true)?;
+                        }
+                        SHIFT_UP => {
+                            self.move_selections(self.focused, Movement::Up, true)?;
+                        }
+                        SHIFT_RIGHT => {
+                            self.move_selections(self.focused, Movement::Right, true)?;
+                        }
+                        _ => {}
+                    },
+                    _ => break 'arrows,
+                }
+                return Ok(());
+            }
+        }
+
         match self.windows[self.focused].mode {
             Mode::Normal => match event {
                 Event::Key(Key::Char('i')) => {
@@ -231,16 +267,16 @@ impl Edot {
                 Event::Key(Key::Char(':')) => {
                     self.set_mode(self.focused, Mode::Command);
                 }
-                Event::Key(Key::Char('h')) | Event::Key(Key::Left) => {
+                Event::Key(Key::Char('h')) => {
                     self.move_selections(self.focused, Movement::Left, false)?;
                 }
-                Event::Key(Key::Char('j')) | Event::Key(Key::Down) => {
+                Event::Key(Key::Char('j')) => {
                     self.move_selections(self.focused, Movement::Down, false)?;
                 }
-                Event::Key(Key::Char('k')) | Event::Key(Key::Up) => {
+                Event::Key(Key::Char('k')) => {
                     self.move_selections(self.focused, Movement::Up, false)?;
                 }
-                Event::Key(Key::Char('l')) | Event::Key(Key::Right) => {
+                Event::Key(Key::Char('l')) => {
                     self.move_selections(self.focused, Movement::Right, false)?;
                 }
                 Event::Key(Key::Char('H')) => {
@@ -258,21 +294,6 @@ impl Edot {
                 Event::Key(Key::Char('d')) => {
                     self.delete_selections(self.focused);
                 }
-                Event::Unsupported(keys) => match keys.as_slice() {
-                    SHIFT_LEFT => {
-                        self.move_selections(self.focused, Movement::Left, true)?;
-                    }
-                    SHIFT_DOWN => {
-                        self.move_selections(self.focused, Movement::Down, true)?;
-                    }
-                    SHIFT_UP => {
-                        self.move_selections(self.focused, Movement::Up, true)?;
-                    }
-                    SHIFT_RIGHT => {
-                        self.move_selections(self.focused, Movement::Right, true)?;
-                    }
-                    _ => {}
-                },
                 _ => {}
             },
             Mode::Goto { drag } => {

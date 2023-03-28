@@ -1,4 +1,3 @@
-use fehler::{throw, throws};
 use ropey::{Rope, RopeSlice};
 use std::{
     mem::swap,
@@ -152,7 +151,7 @@ impl Position {
                     assert_eq!(rope.len_chars(), 0);
                     self.line = Line::from_one_based(1);
                     self.column = Column::from_one_based(1);
-                    panic!(MovementError::SelectionEmpty);
+                    panic!("{}", MovementError::SelectionEmpty);
                 }
             } else {
                 self.move_to(rope, Movement::LineEnd).unwrap();
@@ -178,8 +177,7 @@ impl Position {
         }
     }
 
-    #[throws(MovementError)]
-    pub fn move_to(&mut self, rope: &Rope, movement: Movement) {
+    pub fn move_to(&mut self, rope: &Rope, movement: Movement) -> Result<(), MovementError> {
         match movement {
             Movement::Left => {
                 self.validate(rope);
@@ -188,7 +186,7 @@ impl Position {
                         self.move_to(rope, Movement::Up)?;
                         self.move_to(rope, Movement::LineEnd)?;
                     } else {
-                        throw!(MovementError::NoPrevLine);
+                        return Err(MovementError::NoPrevLine);
                     }
                 } else {
                     self.column -= 1;
@@ -205,7 +203,7 @@ impl Position {
             }
             Movement::Up => {
                 if self.line.is_first() {
-                    throw!(MovementError::NoPrevLine);
+                    return Err(MovementError::NoPrevLine);
                 } else {
                     self.line -= 1;
                 }
@@ -214,7 +212,7 @@ impl Position {
                 if !self.line.is_last(rope) && (self.line + 1).slice_of(rope).len_chars() > 0 {
                     self.line += 1;
                 } else {
-                    throw!(MovementError::NoNextLine);
+                    return Err(MovementError::NoNextLine);
                 }
             }
             Movement::LineStart => {
@@ -237,6 +235,7 @@ impl Position {
                 self.move_to(rope, Movement::LineStart)?;
             }
         }
+        Ok(())
     }
 }
 

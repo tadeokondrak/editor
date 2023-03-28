@@ -2,11 +2,10 @@ use crate::{
     id_vec::{Id, IdVec},
     location::{Column, Line, Movement, MovementError, Position, Selection},
     terminal::{Point, Rect},
-    Error, Result,
+    Result,
 };
 use anyhow::{format_err, Context as _};
 use crossbeam_channel::{select, unbounded, Receiver, Sender};
-use fehler::throws;
 use log::{error, info, trace};
 use ropey::Rope;
 use shlex::split as shlex;
@@ -63,8 +62,7 @@ id!(WindowId);
 id!(BufferId);
 
 impl Edot {
-    #[throws]
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self> {
         let (signals, signal) = unbounded();
         let (inputs, input) = unbounded();
         let signal_iter = Signals::new(&[SIGWINCH])?;
@@ -79,7 +77,7 @@ impl Edot {
                 inputs.send(event).unwrap();
             }
         });
-        Self {
+        Ok(Self {
             signal,
             input,
             exit: unbounded(),
@@ -115,12 +113,11 @@ impl Edot {
             editor_dirty: true,
             statusline_dirty: true,
             message: None,
-        }
+        })
     }
 
-    #[throws]
     #[allow(unreachable_code)]
-    pub fn run(mut self) {
+    pub fn run(mut self) -> Result {
         write!(
             self.output,
             "{}{}{}",
@@ -136,7 +133,7 @@ impl Edot {
             self.draw()?;
             match self.main() {
                 Ok(true) => continue,
-                Ok(false) => return,
+                Ok(false) => return Ok(()),
                 Err(err) => {
                     error!("{}", err);
                     self.show_message(Importance::Error, err.to_string());
@@ -145,18 +142,16 @@ impl Edot {
         }
     }
 
-    #[throws]
-    fn main(&mut self) -> bool {
+    fn main(&mut self) -> Result<bool> {
         select! {
             recv(self.input) -> input => self.event(input??)?,
             recv(self.signal) -> signal => self.signal(signal?)?,
             recv(self.exit.1) -> exit => { exit?; return Ok(false); },
         }
-        true
+        Ok(true)
     }
 
-    #[throws]
-    fn cmd(&mut self, args: &[&str]) {
+    fn cmd(&mut self, args: &[&str]) -> Result {
         let name = args.get(0).context("no command given")?;
         let cmd = self
             .commands
@@ -169,6 +164,7 @@ impl Edot {
             },
             &args[1..],
         )?;
+        Ok(())
     }
 
     fn register<T: Command>(&mut self, s: &str) -> &mut Self {
@@ -176,8 +172,7 @@ impl Edot {
         self
     }
 
-    #[throws]
-    fn event(&mut self, event: Event) {
+    fn event(&mut self, event: Event) -> Result {
         trace!("event: {:?}", event);
         match self.windows[self.focused].mode {
             Mode::Normal => match event {
@@ -328,19 +323,19 @@ impl Edot {
                 _ => {}
             },
         }
+        Ok(())
     }
 
-    #[throws]
-    fn signal(&mut self, signal: c_int) {
+    fn signal(&mut self, signal: c_int) -> Result {
         info!("received signal: {}", signal);
         match signal {
             signal_hook::SIGWINCH => self.draw()?,
             _ => {}
         }
+        Ok(())
     }
 
-    #[throws]
-    fn draw(&mut self) {
+    fn draw(&mut self) -> Result {
         let (width, height) = terminal_size()?;
 
         let region = Rect {
@@ -368,10 +363,10 @@ impl Edot {
         self.draw_status(region)?;
 
         self.output.flush()?;
+        Ok(())
     }
 
-    #[throws]
-    fn draw_tabs(&mut self, region: Rect) {
+    fn draw_tabs(&mut self, region: Rect) -> Result {
         write!(self.output, "{}{}", region.start.goto(), clear::CurrentLine)?;
         for window_id in (0..self.windows.len()).map(WindowId) {
             let window = &self.windows[window_id];
@@ -379,10 +374,10 @@ impl Edot {
             write!(self.output, "{} ", buffer.name)?;
         }
         self.tabline_dirty = false;
+        Ok(())
     }
 
-    #[throws]
-    fn draw_status(&mut self, region: Rect) {
+    fn draw_status(&mut self, region: Rect) -> Result {
         if let Some((_importance, message)) = self.message.take() {
             write!(
                 self.output,
@@ -419,10 +414,10 @@ impl Edot {
             }
             self.statusline_dirty = false;
         }
+        Ok(())
     }
 
-    #[throws]
-    fn draw_window(&mut self, window_id: WindowId, region: Rect) {
+    fn draw_window(&mut self, window_id: WindowId, region: Rect) -> Result {
         // TODO: draw a block where the next character will go in insert mode
         let window = &self.windows[window_id];
         let buffer = &self.buffers[window.buffer];
@@ -463,6 +458,7 @@ impl Edot {
                 }
             }
         }
+        Ok(())
     }
 
     pub fn show_message(&mut self, importance: Importance, message: String) {
@@ -503,14 +499,13 @@ impl Edot {
         selection.end.insert_char(&mut buffer.content, c);
     }
 
-    #[throws(MovementError)]
     pub fn move_selection(
         &mut self,
         window_id: WindowId,
         selection_id: SelectionId,
         movement: Movement,
         drag: bool,
-    ) {
+    ) -> Result<(), MovementError> {
         let window = &mut self.windows[window_id];
         let buffer = &mut self.buffers[window.buffer];
         let selection = &mut window.selections[selection_id];
@@ -518,34 +513,44 @@ impl Edot {
         if !drag {
             selection.start = selection.end;
         }
+        Ok(())
     }
 
-    #[throws(MovementError)]
-    pub fn move_selections(&mut self, window_id: WindowId, movement: Movement, drag: bool) {
+    pub fn move_selections(
+        &mut self,
+        window_id: WindowId,
+        movement: Movement,
+        drag: bool,
+    ) -> Result<(), MovementError> {
         for selection_id in self.selections(window_id) {
             self.move_selection(window_id, selection_id, movement, drag)?;
         }
+        Ok(())
     }
 
-    #[throws(MovementError)]
     pub fn shift_selection(
         &mut self,
         window_id: WindowId,
         selection_id: SelectionId,
         movement: Movement,
-    ) {
+    ) -> Result<(), MovementError> {
         let window = &mut self.windows[window_id];
         let buffer = &mut self.buffers[window.buffer];
         let selection = &mut window.selections[selection_id];
         selection.start.move_to(&buffer.content, movement)?;
         selection.end.move_to(&buffer.content, movement)?;
+        Ok(())
     }
 
-    #[throws(MovementError)]
-    pub fn shift_selections(&mut self, window_id: WindowId, movement: Movement) {
+    pub fn shift_selections(
+        &mut self,
+        window_id: WindowId,
+        movement: Movement,
+    ) -> Result<(), MovementError> {
         for selection_id in self.selections(window_id) {
             self.shift_selection(window_id, selection_id, movement)?;
         }
+        Ok(())
     }
 
     pub fn delete_selection(&mut self, window_id: WindowId, selection_id: SelectionId) {
@@ -585,9 +590,9 @@ impl Edot {
         }
     }
 
-    pub fn for_each_selection<F>(&mut self, window_id: WindowId, mut f: F) -> Result<(), Error>
+    pub fn for_each_selection<F>(&mut self, window_id: WindowId, mut f: F) -> Result
     where
-        F: FnMut(&mut Self, WindowId, SelectionId) -> Result<(), Error>,
+        F: FnMut(&mut Self, WindowId, SelectionId) -> Result,
     {
         let mut errors = Vec::new();
         for selection_id in self.selections(window_id) {
@@ -678,9 +683,9 @@ enum Quit {}
 impl Command for Quit {
     const DESCRIPTION: &'static str = "quits the editor";
 
-    #[throws]
-    fn run(cx: Context, _args: &[&str]) {
+    fn run(cx: Context, _args: &[&str]) -> Result {
         cx.editor.quit();
+        Ok(())
     }
 }
 
@@ -690,8 +695,7 @@ impl Command for Edit {
     const DESCRIPTION: &'static str = "open a file";
     const REQUIRED_ARGUMENTS: usize = 1;
 
-    #[throws]
-    fn run(cx: Context, args: &[&str]) {
+    fn run(cx: Context, args: &[&str]) -> Result {
         let name = String::from(args[0]);
         let path = PathBuf::from(&name).canonicalize()?;
         let reader = File::open(&path)?;
@@ -724,5 +728,6 @@ impl Command for Edit {
         let window_id = WindowId(cx.editor.windows.len());
         cx.editor.windows.push(window);
         cx.editor.focused = window_id;
+        Ok(())
     }
 }

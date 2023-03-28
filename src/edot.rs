@@ -470,7 +470,17 @@ impl Edot {
         for window_id in (0..self.windows.len()).map(WindowId) {
             let window = &self.windows[window_id];
             let buffer = &self.buffers[window.buffer];
-            write!(self.output, "{} ", buffer.name)?;
+            if window_id == self.focused {
+                write!(
+                    self.output,
+                    "{}{}{} ",
+                    style::Bold,
+                    buffer.name,
+                    style::Reset,
+                )?;
+            } else {
+                write!(self.output, "{} ", buffer.name)?;
+            }
         }
         self.tabline_dirty = false;
         Ok(())

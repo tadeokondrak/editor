@@ -594,11 +594,11 @@ impl Edot {
         let window = &mut self.windows[window_id];
         let buffer = &mut self.buffers[window.buffer];
         let selection = &mut window.selections[selection_id];
-        selection.end.move_to(&buffer.content, movement)?;
+        let result = selection.end.move_to(&buffer.content, movement);
         if !drag {
             selection.start = selection.end;
         }
-        Ok(())
+        result
     }
 
     pub fn move_selections(

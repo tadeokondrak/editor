@@ -452,9 +452,23 @@ impl Edot {
 
     fn draw_window(&mut self, window_id: WindowId, region: Rect) -> Result {
         // TODO: draw a block where the next character will go in insert mode
-        let window = &self.windows[window_id];
+        let window = &mut self.windows[window_id];
+        {
+            let first_visible_line = window.top;
+            let last_visible_line = window.top + usize::from(region.height());
+            let main_selection = window.selections.first().unwrap();
+            if main_selection.end.line < first_visible_line {
+                window.top = main_selection.end.line;
+            } else if main_selection.end.line > last_visible_line {
+                window.top = main_selection.end.line - usize::from(region.height());
+            }
+        }
         let buffer = &self.buffers[window.buffer];
-        let mut lines = buffer.content.lines_at(window.top.zero_based()).enumerate();
+        let mut lines = buffer
+            .content
+            .lines_at(window.top.zero_based())
+            .enumerate()
+            .map(|(line, text)| (line + window.top.zero_based(), text));
         let mut range_y = region.range_y();
         'outer: while let Some(y) = range_y.next() {
             write!(self.output, "{}{}", cursor::Goto(1, y), clear::CurrentLine)?;

@@ -180,6 +180,9 @@ impl Position {
     pub fn move_to(&mut self, rope: &Rope, movement: Movement) -> Result<(), MovementError> {
         match movement {
             Movement::Left(n) => {
+                if n == 0 {
+                    return Ok(());
+                }
                 // TODO: remove the loop
                 let mut moved = false;
                 for _ in 0..n {
@@ -202,6 +205,9 @@ impl Position {
                 }
             }
             Movement::Right(n) => {
+                if n == 0 {
+                    return Ok(());
+                }
                 // TODO: remove the loop
                 let mut moved = false;
                 for _ in 0..n {
@@ -220,6 +226,9 @@ impl Position {
                 }
             }
             Movement::Up(n) => {
+                if n == 0 {
+                    return Ok(());
+                }
                 let n = n.min(self.line.zero_based());
                 if n == 0 {
                     return Err(MovementError::NoPrevLine);
@@ -227,6 +236,9 @@ impl Position {
                 self.line -= n;
             }
             Movement::Down(n) => {
+                if n == 0 {
+                    return Ok(());
+                }
                 // TODO: remove the loop
                 let mut moved = false;
                 for _ in 0..n {

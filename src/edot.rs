@@ -316,6 +316,26 @@ impl Edot {
                         )?;
                     }
                 }
+                Event::Key(Key::Ctrl('b') | Key::PageUp) => {
+                    if let Some(height) = self.last_screen_height {
+                        self.move_selection(
+                            self.focused,
+                            SelectionId(0),
+                            Movement::Up(usize::from(height)),
+                            false,
+                        )?;
+                    }
+                }
+                Event::Key(Key::Ctrl('f') | Key::PageDown) => {
+                    if let Some(height) = self.last_screen_height {
+                        self.move_selection(
+                            self.focused,
+                            SelectionId(0),
+                            Movement::Down(usize::from(height)),
+                            false,
+                        )?;
+                    }
+                }
                 _ => {}
             },
             Mode::Goto { drag } => {

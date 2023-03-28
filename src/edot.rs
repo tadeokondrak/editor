@@ -201,6 +201,12 @@ impl Edot {
                     Event::Key(Key::Right) => {
                         self.move_selections(self.focused, Movement::Right(1), false)?;
                     }
+                    Event::Key(Key::Ctrl('p')) => {
+                        self.focused = WindowId((self.focused.0 - 1) % self.windows.len());
+                    }
+                    Event::Key(Key::Ctrl('n')) => {
+                        self.focused = WindowId((self.focused.0 + 1) % self.windows.len());
+                    }
                     Event::Unsupported(keys) => match keys.as_slice() {
                         SHIFT_LEFT => {
                             self.move_selections(self.focused, Movement::Left(1), true)?;

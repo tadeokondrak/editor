@@ -57,6 +57,7 @@ pub struct Edot {
     tabline_dirty: bool,
     editor_dirty: bool,
     statusline_dirty: bool,
+    last_screen_height: Option<u16>,
     message: Option<(Importance, String)>,
 }
 
@@ -114,6 +115,7 @@ impl Edot {
             tabline_dirty: true,
             editor_dirty: true,
             statusline_dirty: true,
+            last_screen_height: None,
             message: None,
         })
     }
@@ -402,6 +404,7 @@ impl Edot {
             },
         };
         self.draw_window(self.focused, region)?;
+        self.last_screen_height = Some(region.height());
 
         let region = Rect {
             start: Point { x: 1, y: height },

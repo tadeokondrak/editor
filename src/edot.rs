@@ -178,6 +178,12 @@ impl Edot {
 
     fn event(&mut self, event: Event) -> Result {
         trace!("event: {:?}", event);
+
+        const SHIFT_UP: &[u8] = &[27, 91, 49, 59, 50, 65];
+        const SHIFT_DOWN: &[u8] = &[27, 91, 49, 59, 50, 66];
+        const SHIFT_RIGHT: &[u8] = &[27, 91, 49, 59, 50, 67];
+        const SHIFT_LEFT: &[u8] = &[27, 91, 49, 59, 50, 68];
+
         match self.windows[self.focused].mode {
             Mode::Normal => match event {
                 Event::Key(Key::Char('i')) => {
@@ -252,6 +258,21 @@ impl Edot {
                 Event::Key(Key::Char('d')) => {
                     self.delete_selections(self.focused);
                 }
+                Event::Unsupported(keys) => match keys.as_slice() {
+                    SHIFT_LEFT => {
+                        self.move_selections(self.focused, Movement::Left, true)?;
+                    }
+                    SHIFT_DOWN => {
+                        self.move_selections(self.focused, Movement::Down, true)?;
+                    }
+                    SHIFT_UP => {
+                        self.move_selections(self.focused, Movement::Up, true)?;
+                    }
+                    SHIFT_RIGHT => {
+                        self.move_selections(self.focused, Movement::Right, true)?;
+                    }
+                    _ => {}
+                },
                 _ => {}
             },
             Mode::Goto { drag } => {

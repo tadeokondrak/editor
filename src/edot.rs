@@ -5,13 +5,13 @@ use crate::{
     Result,
 };
 use anyhow::{format_err, Context as _};
-use crossbeam_channel::{select, unbounded, Receiver, Select, Sender};
+use crossbeam_channel::{select, unbounded, Receiver, Sender};
 use log::{error, info, trace};
 use ropey::Rope;
 use shlex::split as shlex;
 use signal_hook::{iterator::Signals, SIGWINCH};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     fmt::Debug,
     fs::{File, OpenOptions},
     io::{self, Write as _},
@@ -51,7 +51,6 @@ pub struct Edot {
     exit: (Sender<()>, Receiver<()>),
     windows: IdVec<WindowId, Window>,
     buffers: IdVec<BufferId, Buffer>,
-    commands: HashMap<String, CommandDesc>,
     output: RawTerminal<File>,
     focused: WindowId,
     tabline_dirty: bool,
@@ -109,7 +108,6 @@ impl Edot {
                 path: None,
             }]
             .into(),
-            commands: HashMap::new(),
             output: get_tty()?.into_raw_mode()?,
             focused: WindowId(0),
             tabline_dirty: true,
@@ -129,12 +127,6 @@ impl Edot {
             cursor::Hide,
             cursor::SteadyBar
         )?;
-        self.register::<QuitCmd>("q")
-            .register::<QuitCmd>("quit")
-            .register::<EditCmd>("e")
-            .register::<EditCmd>("edit")
-            .register::<WriteCmd>("w")
-            .register::<WriteCmd>("write");
         loop {
             self.draw()?;
             match self.main() {
@@ -158,10 +150,10 @@ impl Edot {
     }
 
     fn cmd(&mut self, args: &[&str]) -> Result {
-        let name = args.get(0).context("no command given")?;
-        let cmd = self
-            .commands
-            .get(*name)
+        let name = args.get(0).copied().context("no command given")?;
+        let cmd = COMMANDS
+            .iter()
+            .find(|desc| desc.name == name || desc.aliases.contains(&name))
             .ok_or_else(|| format_err!("command '{}' doesn't exist", name))?;
         (cmd.run)(
             Context {
@@ -171,11 +163,6 @@ impl Edot {
             &args[1..],
         )?;
         Ok(())
-    }
-
-    fn register<T: Command>(&mut self, s: &str) -> &mut Self {
-        self.commands.insert(s.to_owned(), CommandDesc::of::<T>());
-        self
     }
 
     fn event(&mut self, event: Event) -> Result {
@@ -877,96 +864,80 @@ pub struct Context<'a> {
     window: WindowId,
 }
 
-pub trait Command: Sized {
-    const DESCRIPTION: &'static str;
-    const REQUIRED_ARGUMENTS: usize = 0;
-
-    fn run(cx: Context, args: &[&str]) -> Result;
-}
-
 pub struct CommandDesc {
+    name: &'static str,
+    aliases: &'static [&'static str],
     description: &'static str,
     required_arguments: usize,
     run: fn(cx: Context, args: &[&str]) -> Result,
 }
 
-impl CommandDesc {
-    fn of<T: Command>() -> Self {
-        Self {
-            description: T::DESCRIPTION,
-            required_arguments: T::REQUIRED_ARGUMENTS,
-            run: T::run,
-        }
-    }
-}
-
-enum QuitCmd {}
-
-impl Command for QuitCmd {
-    const DESCRIPTION: &'static str = "quits the editor";
-
-    fn run(cx: Context, _args: &[&str]) -> Result {
-        cx.editor.quit();
-        Ok(())
-    }
-}
-
-enum EditCmd {}
-
-impl Command for EditCmd {
-    const DESCRIPTION: &'static str = "open a file";
-    const REQUIRED_ARGUMENTS: usize = 1;
-
-    fn run(cx: Context, args: &[&str]) -> Result {
-        let name = String::from(args[0]);
-        let path = PathBuf::from(&name).canonicalize()?;
-        let reader = File::open(&path)?;
-        let buffer = Buffer {
-            path: Some(path),
-            name,
-            content: Rope::from_reader(reader)?,
-            history: History::new(),
-        };
-        let buffer_id = BufferId(cx.editor.buffers.len());
-        cx.editor.buffers.push(buffer);
-        let window = Window {
-            buffer: buffer_id,
-            command: String::new(),
-            mode: Mode::Normal,
-            selections: vec![Selection {
-                // TODO move this out
-                start: Position {
-                    line: Line::from_one_based(1),
-                    column: Column::from_one_based(1),
-                },
-                end: Position {
-                    line: Line::from_one_based(1),
-                    column: Column::from_one_based(1),
-                },
-            }]
-            .into(),
-            top: Line::from_one_based(1),
-        };
-        let window_id = WindowId(cx.editor.windows.len());
-        cx.editor.windows.push(window);
-        cx.editor.focused = window_id;
-        Ok(())
-    }
-}
-
-enum WriteCmd {}
-
-impl Command for WriteCmd {
-    const DESCRIPTION: &'static str = "write the current buffer contents to disk";
-
-    fn run(cx: Context, _args: &[&str]) -> Result {
-        let buffer = &cx.editor.buffers[cx.editor.windows[cx.window].buffer];
-        let path = buffer
-            .path
-            .as_ref()
-            .context("cannot save a scratch buffer")?;
-        let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
-        buffer.content.write_to(&mut file)?;
-        Ok(())
-    }
-}
+const COMMANDS: &[CommandDesc] = &[
+    CommandDesc {
+        name: "quit",
+        aliases: &["q"],
+        description: "quit the editor",
+        required_arguments: 0,
+        run: |cx, _args| {
+            cx.editor.quit();
+            Ok(())
+        },
+    },
+    CommandDesc {
+        name: "open",
+        aliases: &["e"],
+        description: "open a file",
+        required_arguments: 1,
+        run: |cx, args| {
+            let name = String::from(args[0]);
+            let path = PathBuf::from(&name).canonicalize()?;
+            let reader = File::open(&path)?;
+            let buffer = Buffer {
+                path: Some(path),
+                name,
+                content: Rope::from_reader(reader)?,
+                history: History::new(),
+            };
+            let buffer_id = BufferId(cx.editor.buffers.len());
+            cx.editor.buffers.push(buffer);
+            let window = Window {
+                buffer: buffer_id,
+                command: String::new(),
+                mode: Mode::Normal,
+                selections: vec![Selection {
+                    // TODO move this out
+                    start: Position {
+                        line: Line::from_one_based(1),
+                        column: Column::from_one_based(1),
+                    },
+                    end: Position {
+                        line: Line::from_one_based(1),
+                        column: Column::from_one_based(1),
+                    },
+                }]
+                .into(),
+                top: Line::from_one_based(1),
+            };
+            let window_id = WindowId(cx.editor.windows.len());
+            cx.editor.windows.push(window);
+            cx.editor.focused = window_id;
+            Ok(())
+        },
+    },
+    CommandDesc {
+        name: "write",
+        aliases: &["w"],
+        description: "write the current buffer contents to disk",
+        required_arguments: 0,
+        run: |cx, _args| {
+            let buffer = &cx.editor.buffers[cx.editor.windows[cx.window].buffer];
+            let path = buffer
+                .path
+                .as_ref()
+                .context("cannot save a scratch buffer")?;
+            let mut file = OpenOptions::new().write(true).truncate(true).open(path)?;
+            buffer.content.write_to(&mut file)?;
+            Ok(())
+        },
+    },
+];

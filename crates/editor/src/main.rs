@@ -148,8 +148,7 @@ fn run_command(state: &mut State, args: &[&str]) -> Result<()> {
             editor: state,
         },
         &args[1..],
-    )?;
-    Ok(())
+    )
 }
 
 fn handle_event(state: &mut State, event: Event) -> Result<()> {

@@ -45,7 +45,7 @@ macro_rules! id {
     };
 }
 
-pub struct Edot {
+pub struct State {
     signal: Receiver<c_int>,
     input: Receiver<io::Result<Event>>,
     exit: (Sender<()>, Receiver<()>),
@@ -63,7 +63,7 @@ pub struct Edot {
 id!(WindowId);
 id!(BufferId);
 
-pub fn new() -> Result<Edot> {
+pub fn new() -> Result<State> {
     let (signals, signal) = unbounded();
     let (inputs, input) = unbounded();
     let signal_iter = Signals::new(&[SIGWINCH])?;
@@ -78,7 +78,7 @@ pub fn new() -> Result<Edot> {
             inputs.send(event).unwrap();
         }
     });
-    Ok(Edot {
+    Ok(State {
         signal,
         input,
         exit: unbounded(),
@@ -118,8 +118,8 @@ pub fn new() -> Result<Edot> {
 }
 
 #[allow(unreachable_code)]
-pub fn run(mut state: Edot) -> Result {
-    fn handle_next_event(state: &mut Edot) -> Result<bool> {
+pub fn run(mut state: State) -> Result {
+    fn handle_next_event(state: &mut State) -> Result<bool> {
         select! {
             recv(state.input) -> input => handle_event(state, input??)?,
             recv(state.signal) -> signal => handle_signal(state, signal?)?,
@@ -148,7 +148,7 @@ pub fn run(mut state: Edot) -> Result {
     }
 }
 
-fn run_command(state: &mut Edot, args: &[&str]) -> Result {
+fn run_command(state: &mut State, args: &[&str]) -> Result {
     let name = args.get(0).copied().context("no command given")?;
     let cmd = COMMANDS
         .iter()
@@ -163,7 +163,8 @@ fn run_command(state: &mut Edot, args: &[&str]) -> Result {
     )?;
     Ok(())
 }
-fn handle_event(state: &mut Edot, event: Event) -> Result {
+
+fn handle_event(state: &mut State, event: Event) -> Result {
     trace!("event: {:?}", event);
 
     const SHIFT_UP: &[u8] = &[27, 91, 49, 59, 50, 65];
@@ -419,7 +420,7 @@ fn handle_event(state: &mut Edot, event: Event) -> Result {
     Ok(())
 }
 
-fn handle_signal(state: &mut Edot, signal: c_int) -> Result {
+fn handle_signal(state: &mut State, signal: c_int) -> Result {
     info!("received signal: {}", signal);
     match signal {
         signal_hook::SIGWINCH => draw(state)?,
@@ -428,7 +429,7 @@ fn handle_signal(state: &mut Edot, signal: c_int) -> Result {
     Ok(())
 }
 
-fn draw(state: &mut Edot) -> Result {
+fn draw(state: &mut State) -> Result {
     let (width, height) = terminal_size()?;
 
     let region = Rect {
@@ -460,7 +461,7 @@ fn draw(state: &mut Edot) -> Result {
     Ok(())
 }
 
-fn draw_tabs(state: &mut Edot, region: Rect) -> Result {
+fn draw_tabs(state: &mut State, region: Rect) -> Result {
     write!(
         state.output,
         "{}{}",
@@ -486,7 +487,7 @@ fn draw_tabs(state: &mut Edot, region: Rect) -> Result {
     Ok(())
 }
 
-fn draw_status(state: &mut Edot, region: Rect) -> Result {
+fn draw_status(state: &mut State, region: Rect) -> Result {
     if let Some((_importance, message)) = state.message.take() {
         write!(
             state.output,
@@ -534,7 +535,7 @@ fn draw_status(state: &mut Edot, region: Rect) -> Result {
     Ok(())
 }
 
-fn draw_window(state: &mut Edot, window_id: WindowId, region: Rect) -> Result {
+fn draw_window(state: &mut State, window_id: WindowId, region: Rect) -> Result {
     // TODO: draw a block where the next character will go in insert mode
     let window = &mut state.windows[window_id];
     {
@@ -602,15 +603,15 @@ fn draw_window(state: &mut Edot, window_id: WindowId, region: Rect) -> Result {
     Ok(())
 }
 
-pub fn show_message(state: &mut Edot, importance: Importance, message: String) {
+pub fn show_message(state: &mut State, importance: Importance, message: String) {
     state.message = Some((importance, message));
 }
 
-pub fn quit(state: &mut Edot) {
+pub fn quit(state: &mut State) {
     state.exit.0.send(()).unwrap();
 }
 
-pub fn set_mode(state: &mut Edot, window: WindowId, mode: Mode) {
+pub fn set_mode(state: &mut State, window: WindowId, mode: Mode) {
     state.windows[window].mode = mode;
     match mode {
         Mode::Normal => {}
@@ -621,13 +622,13 @@ pub fn set_mode(state: &mut Edot, window: WindowId, mode: Mode) {
     }
 }
 
-pub fn selections(state: &Edot, window: WindowId) -> impl Iterator<Item = SelectionId> {
+pub fn selections(state: &State, window: WindowId) -> impl Iterator<Item = SelectionId> {
     let window = &state.windows[window];
     (0..window.selections.len()).map(SelectionId)
 }
 
 pub fn insert_char_before(
-    state: &mut Edot,
+    state: &mut State,
     window_id: WindowId,
     selection_id: SelectionId,
     c: char,
@@ -639,7 +640,7 @@ pub fn insert_char_before(
 }
 
 pub fn insert_char_after(
-    state: &mut Edot,
+    state: &mut State,
     window_id: WindowId,
     selection_id: SelectionId,
     c: char,
@@ -651,7 +652,7 @@ pub fn insert_char_after(
 }
 
 pub fn move_selection(
-    state: &mut Edot,
+    state: &mut State,
     window_id: WindowId,
     selection_id: SelectionId,
     movement: Movement,
@@ -668,7 +669,7 @@ pub fn move_selection(
 }
 
 pub fn move_selections(
-    state: &mut Edot,
+    state: &mut State,
     window_id: WindowId,
     movement: Movement,
     drag: bool,
@@ -680,7 +681,7 @@ pub fn move_selections(
 }
 
 pub fn shift_selection(
-    state: &mut Edot,
+    state: &mut State,
     window_id: WindowId,
     selection_id: SelectionId,
     movement: Movement,
@@ -694,7 +695,7 @@ pub fn shift_selection(
 }
 
 pub fn shift_selections(
-    state: &mut Edot,
+    state: &mut State,
     window_id: WindowId,
     movement: Movement,
 ) -> Result<(), MovementError> {
@@ -704,46 +705,46 @@ pub fn shift_selections(
     Ok(())
 }
 
-pub fn delete_selection(state: &mut Edot, window_id: WindowId, selection_id: SelectionId) {
+pub fn delete_selection(state: &mut State, window_id: WindowId, selection_id: SelectionId) {
     let window = &mut state.windows[window_id];
     let buffer = &mut state.buffers[window.buffer];
     let selection = &mut window.selections[selection_id];
     selection.remove_from(buffer);
 }
 
-pub fn delete_selections(state: &mut Edot, window_id: WindowId) {
+pub fn delete_selections(state: &mut State, window_id: WindowId) {
     for selection_id in selections(state, window_id) {
         delete_selection(state, window_id, selection_id);
     }
 }
 
-pub fn flip_selection(state: &mut Edot, window_id: WindowId, selection_id: SelectionId) {
+pub fn flip_selection(state: &mut State, window_id: WindowId, selection_id: SelectionId) {
     let window = &mut state.windows[window_id];
     let selection = &mut window.selections[selection_id];
     selection.flip();
 }
 
-pub fn order_selections(state: &mut Edot, window_id: WindowId) {
+pub fn order_selections(state: &mut State, window_id: WindowId) {
     for selection_id in selections(state, window_id) {
         order_selection(state, window_id, selection_id);
     }
 }
 
-pub fn order_selection(state: &mut Edot, window_id: WindowId, selection_id: SelectionId) {
+pub fn order_selection(state: &mut State, window_id: WindowId, selection_id: SelectionId) {
     let window = &mut state.windows[window_id];
     let selection = &mut window.selections[selection_id];
     selection.order();
 }
 
-pub fn flip_selections(state: &mut Edot, window_id: WindowId) {
+pub fn flip_selections(state: &mut State, window_id: WindowId) {
     for selection_id in selections(state, window_id) {
         flip_selection(state, window_id, selection_id);
     }
 }
 
-pub fn for_each_selection<F>(state: &mut Edot, window_id: WindowId, mut f: F) -> Result
+pub fn for_each_selection<F>(state: &mut State, window_id: WindowId, mut f: F) -> Result
 where
-    F: FnMut(&mut Edot, WindowId, SelectionId) -> Result,
+    F: FnMut(&mut State, WindowId, SelectionId) -> Result,
 {
     let mut errors = Vec::new();
     for selection_id in selections(state, window_id) {
@@ -754,7 +755,7 @@ where
     errors.pop().map_or(Ok(()), Err)
 }
 
-pub fn undo(state: &mut Edot, window_id: WindowId) {
+pub fn undo(state: &mut State, window_id: WindowId) {
     let window = &mut state.windows[window_id];
     let buffer = &mut state.buffers[window.buffer];
     match buffer.history.undo(&mut buffer.content) {
@@ -774,7 +775,7 @@ pub fn undo(state: &mut Edot, window_id: WindowId) {
     }
 }
 
-impl Drop for Edot {
+impl Drop for State {
     fn drop(&mut self) {
         _ = write!(
             self.output,
@@ -879,7 +880,7 @@ pub enum Importance {
 }
 
 pub struct Context<'a> {
-    editor: &'a mut Edot,
+    editor: &'a mut State,
     window: WindowId,
 }
 

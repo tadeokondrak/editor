@@ -665,9 +665,11 @@ fn for_each_selection_in_window<F>(state: &mut State, window_id: WindowId, mut f
 where
     F: FnMut(&mut Buffer, &mut Selection),
 {
-    #[allow(clippy::unit_arg)]
-    try_for_each_selection_in_window::<_, Infallible>(state, window_id, |buf, sel| Ok(f(buf, sel)))
-        .unwrap()
+    try_for_each_selection_in_window::<_, Infallible>(state, window_id, |buf, sel| {
+        f(buf, sel);
+        Ok(())
+    })
+    .unwrap()
 }
 
 fn with_primary_selection_in_focused_window<F, R>(state: &mut State, f: F) -> R

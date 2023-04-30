@@ -46,18 +46,18 @@ macro_rules! id {
 }
 
 pub struct State {
-    signal: Receiver<c_int>,
-    input: Receiver<io::Result<Event>>,
-    exit: (Sender<()>, Receiver<()>),
+    signals: Receiver<c_int>,
+    inputs: Receiver<io::Result<Event>>,
+    exit_channels: (Sender<()>, Receiver<()>),
     windows: IdVec<WindowId, Window>,
     buffers: IdVec<BufferId, Buffer>,
-    output: RawTerminal<File>,
-    focused: WindowId,
-    tabline_dirty: bool,
-    editor_dirty: bool,
-    statusline_dirty: bool,
+    tty: RawTerminal<File>,
+    focused_window: WindowId,
+    tabline_needs_redraw: bool,
+    editor_needs_redraw: bool,
+    statusline_needs_redraw: bool,
     last_screen_height: Option<u16>,
-    message: Option<(Importance, String)>,
+    pending_message: Option<(Importance, String)>,
 }
 
 id!(WindowId);
@@ -79,9 +79,9 @@ pub fn new() -> Result<State> {
         }
     });
     Ok(State {
-        signal,
-        input,
-        exit: unbounded(),
+        signals: signal,
+        inputs: input,
+        exit_channels: unbounded(),
         windows: vec![Window {
             buffer: BufferId(0),
             mode: Mode::Normal,
@@ -107,13 +107,13 @@ pub fn new() -> Result<State> {
             path: None,
         }]
         .into(),
-        output: get_tty()?.into_raw_mode()?,
-        focused: WindowId(0),
-        tabline_dirty: true,
-        editor_dirty: true,
-        statusline_dirty: true,
+        tty: get_tty()?.into_raw_mode()?,
+        focused_window: WindowId(0),
+        tabline_needs_redraw: true,
+        editor_needs_redraw: true,
+        statusline_needs_redraw: true,
         last_screen_height: None,
-        message: None,
+        pending_message: None,
     })
 }
 
@@ -121,15 +121,15 @@ pub fn new() -> Result<State> {
 pub fn run(mut state: State) -> Result {
     fn handle_next_event(state: &mut State) -> Result<bool> {
         select! {
-            recv(state.input) -> input => handle_event(state, input??)?,
-            recv(state.signal) -> signal => handle_signal(state, signal?)?,
-            recv(state.exit.1) -> exit => { exit?; return Ok(false); },
+            recv(state.inputs) -> input => handle_event(state, input??)?,
+            recv(state.signals) -> signal => handle_signal(state, signal?)?,
+            recv(state.exit_channels.1) -> exit => { exit?; return Ok(false); },
         }
         Ok(true)
     }
 
     write!(
-        state.output,
+        state.tty,
         "{}{}{}",
         screen::ToAlternateScreen,
         cursor::Hide,
@@ -156,7 +156,7 @@ fn run_command(state: &mut State, args: &[&str]) -> Result {
         .ok_or_else(|| format_err!("command '{}' doesn't exist", name))?;
     (cmd.run)(
         Context {
-            window: state.focused,
+            window: state.focused_window,
             editor: state,
         },
         &args[1..],
@@ -173,25 +173,26 @@ fn handle_event(state: &mut State, event: Event) -> Result {
     const SHIFT_LEFT: &[u8] = &[27, 91, 49, 59, 50, 68];
 
     'arrows: {
-        if let Mode::Normal | Mode::Insert | Mode::Append = state.windows[state.focused].mode {
+        if let Mode::Normal | Mode::Insert | Mode::Append = state.windows[state.focused_window].mode
+        {
             match event {
                 Event::Key(Key::Left) => {
-                    move_selections(state, state.focused, Movement::Left(1), false)?;
+                    move_selections(state, state.focused_window, Movement::Left(1), false)?;
                 }
                 Event::Key(Key::Down) => {
-                    move_selections(state, state.focused, Movement::Down(1), false)?;
+                    move_selections(state, state.focused_window, Movement::Down(1), false)?;
                 }
                 Event::Key(Key::Up) => {
-                    move_selections(state, state.focused, Movement::Up(1), false)?;
+                    move_selections(state, state.focused_window, Movement::Up(1), false)?;
                 }
                 Event::Key(Key::Right) => {
-                    move_selections(state, state.focused, Movement::Right(1), false)?;
+                    move_selections(state, state.focused_window, Movement::Right(1), false)?;
                 }
                 Event::Key(Key::Ctrl('u')) => {
                     if let Some(height) = state.last_screen_height {
                         move_selection(
                             state,
-                            state.focused,
+                            state.focused_window,
                             SelectionId::PRIMARY,
                             Movement::Up(usize::from(height / 2)),
                             false,
@@ -202,7 +203,7 @@ fn handle_event(state: &mut State, event: Event) -> Result {
                     if let Some(height) = state.last_screen_height {
                         move_selection(
                             state,
-                            state.focused,
+                            state.focused_window,
                             SelectionId::PRIMARY,
                             Movement::Down(usize::from(height / 2)),
                             false,
@@ -213,7 +214,7 @@ fn handle_event(state: &mut State, event: Event) -> Result {
                     if let Some(height) = state.last_screen_height {
                         move_selection(
                             state,
-                            state.focused,
+                            state.focused_window,
                             SelectionId::PRIMARY,
                             Movement::Up(usize::from(height)),
                             false,
@@ -224,7 +225,7 @@ fn handle_event(state: &mut State, event: Event) -> Result {
                     if let Some(height) = state.last_screen_height {
                         move_selection(
                             state,
-                            state.focused,
+                            state.focused_window,
                             SelectionId::PRIMARY,
                             Movement::Down(usize::from(height)),
                             false,
@@ -232,23 +233,25 @@ fn handle_event(state: &mut State, event: Event) -> Result {
                     }
                 }
                 Event::Key(Key::Ctrl('p')) => {
-                    state.focused = WindowId((state.focused.0 - 1) % state.windows.len());
+                    state.focused_window =
+                        WindowId((state.focused_window.0 - 1) % state.windows.len());
                 }
                 Event::Key(Key::Ctrl('n')) => {
-                    state.focused = WindowId((state.focused.0 + 1) % state.windows.len());
+                    state.focused_window =
+                        WindowId((state.focused_window.0 + 1) % state.windows.len());
                 }
                 Event::Unsupported(keys) => match keys.as_slice() {
                     SHIFT_LEFT => {
-                        move_selections(state, state.focused, Movement::Left(1), true)?;
+                        move_selections(state, state.focused_window, Movement::Left(1), true)?;
                     }
                     SHIFT_DOWN => {
-                        move_selections(state, state.focused, Movement::Down(1), true)?;
+                        move_selections(state, state.focused_window, Movement::Down(1), true)?;
                     }
                     SHIFT_UP => {
-                        move_selections(state, state.focused, Movement::Up(1), true)?;
+                        move_selections(state, state.focused_window, Movement::Up(1), true)?;
                     }
                     SHIFT_RIGHT => {
-                        move_selections(state, state.focused, Movement::Right(1), true)?;
+                        move_selections(state, state.focused_window, Movement::Right(1), true)?;
                     }
                     _ => {}
                 },
@@ -258,38 +261,50 @@ fn handle_event(state: &mut State, event: Event) -> Result {
         }
     }
 
-    match state.windows[state.focused].mode {
+    match state.windows[state.focused_window].mode {
         Mode::Normal => match event {
             Event::Key(Key::Char('i')) => {
-                order_selections(state, state.focused);
-                set_mode(state, state.focused, Mode::Insert);
+                order_selections(state, state.focused_window);
+                set_mode(state, state.focused_window, Mode::Insert);
             }
             Event::Key(Key::Char('c')) => {
-                delete_selections(state, state.focused);
-                set_mode(state, state.focused, Mode::Insert);
+                delete_selections(state, state.focused_window);
+                set_mode(state, state.focused_window, Mode::Insert);
             }
             Event::Key(Key::Char('a')) => {
-                order_selections(state, state.focused);
-                set_mode(state, state.focused, Mode::Append);
+                order_selections(state, state.focused_window);
+                set_mode(state, state.focused_window, Mode::Append);
             }
             Event::Key(Key::Char('A')) => {
-                move_selections(state, state.focused, Movement::LineEnd, false)?;
-                set_mode(state, state.focused, Mode::Insert);
+                move_selections(state, state.focused_window, Movement::LineEnd, false)?;
+                set_mode(state, state.focused_window, Mode::Insert);
             }
             Event::Key(Key::Char('o')) => {
-                for selection_id in selections(state, state.focused) {
-                    move_selection(state, state.focused, selection_id, Movement::LineEnd, false)?;
-                    insert_char_after(state, state.focused, selection_id, '\n');
-                    move_selection(state, state.focused, selection_id, Movement::Down(1), false)?;
+                for selection_id in selections(state, state.focused_window) {
                     move_selection(
                         state,
-                        state.focused,
+                        state.focused_window,
+                        selection_id,
+                        Movement::LineEnd,
+                        false,
+                    )?;
+                    insert_char_after(state, state.focused_window, selection_id, '\n');
+                    move_selection(
+                        state,
+                        state.focused_window,
+                        selection_id,
+                        Movement::Down(1),
+                        false,
+                    )?;
+                    move_selection(
+                        state,
+                        state.focused_window,
                         selection_id,
                         Movement::LineStart,
                         false,
                     )?;
                 }
-                set_mode(state, state.focused, Mode::Insert);
+                set_mode(state, state.focused_window, Mode::Insert);
             }
             Event::Key(Key::Char('x')) => {
                 // self.move_selections(self.focused, Movement::Line, false)?;
@@ -298,74 +313,74 @@ fn handle_event(state: &mut State, event: Event) -> Result {
                 // self.move_selections(self.focused, Movement::Line, true)?;
             }
             Event::Key(Key::Char('g')) => {
-                set_mode(state, state.focused, Mode::Goto { drag: false });
+                set_mode(state, state.focused_window, Mode::Goto { drag: false });
             }
             Event::Key(Key::Char('G')) => {
-                set_mode(state, state.focused, Mode::Goto { drag: true });
+                set_mode(state, state.focused_window, Mode::Goto { drag: true });
             }
             Event::Key(Key::Char(':')) => {
-                set_mode(state, state.focused, Mode::Command);
+                set_mode(state, state.focused_window, Mode::Command);
             }
             Event::Key(Key::Char('h')) => {
-                move_selections(state, state.focused, Movement::Left(1), false)?;
+                move_selections(state, state.focused_window, Movement::Left(1), false)?;
             }
             Event::Key(Key::Char('j')) => {
-                move_selections(state, state.focused, Movement::Down(1), false)?;
+                move_selections(state, state.focused_window, Movement::Down(1), false)?;
             }
             Event::Key(Key::Char('k')) => {
-                move_selections(state, state.focused, Movement::Up(1), false)?;
+                move_selections(state, state.focused_window, Movement::Up(1), false)?;
             }
             Event::Key(Key::Char('l')) => {
-                move_selections(state, state.focused, Movement::Right(1), false)?;
+                move_selections(state, state.focused_window, Movement::Right(1), false)?;
             }
             Event::Key(Key::Char('H')) => {
-                move_selections(state, state.focused, Movement::Left(1), true)?;
+                move_selections(state, state.focused_window, Movement::Left(1), true)?;
             }
             Event::Key(Key::Char('J')) => {
-                move_selections(state, state.focused, Movement::Down(1), true)?;
+                move_selections(state, state.focused_window, Movement::Down(1), true)?;
             }
             Event::Key(Key::Char('K')) => {
-                move_selections(state, state.focused, Movement::Up(1), true)?;
+                move_selections(state, state.focused_window, Movement::Up(1), true)?;
             }
             Event::Key(Key::Char('L')) => {
-                move_selections(state, state.focused, Movement::Right(1), true)?;
+                move_selections(state, state.focused_window, Movement::Right(1), true)?;
             }
             Event::Key(Key::Char('d')) => {
-                delete_selections(state, state.focused);
+                delete_selections(state, state.focused_window);
             }
             Event::Key(Key::Char('u')) => {
-                undo(state, state.focused);
+                undo(state, state.focused_window);
             }
             _ => {}
         },
         Mode::Goto { drag } => {
             match event {
                 Event::Key(Key::Char('h')) => {
-                    move_selections(state, state.focused, Movement::LineStart, drag)?;
+                    move_selections(state, state.focused_window, Movement::LineStart, drag)?;
                 }
                 Event::Key(Key::Char('j')) => {
-                    move_selections(state, state.focused, Movement::FileEnd, drag)?;
+                    move_selections(state, state.focused_window, Movement::FileEnd, drag)?;
                 }
                 Event::Key(Key::Char('k')) => {
-                    move_selections(state, state.focused, Movement::FileStart, drag)?;
+                    move_selections(state, state.focused_window, Movement::FileStart, drag)?;
                 }
                 Event::Key(Key::Char('l')) => {
-                    move_selections(state, state.focused, Movement::LineEnd, drag)?;
+                    move_selections(state, state.focused_window, Movement::LineEnd, drag)?;
                 }
                 _ => {}
             };
-            set_mode(state, state.focused, Mode::Normal);
+            set_mode(state, state.focused_window, Mode::Normal);
         }
         mode @ Mode::Insert | mode @ Mode::Append => match event {
-            Event::Key(Key::Esc) => set_mode(state, state.focused, Mode::Normal),
+            Event::Key(Key::Esc) => set_mode(state, state.focused_window, Mode::Normal),
             Event::Key(Key::Char(c)) => {
-                for selection_id in selections(state, state.focused) {
+                for selection_id in selections(state, state.focused_window) {
                     match mode {
                         Mode::Insert => {
-                            insert_char_before(state, state.focused, selection_id, c);
+                            insert_char_before(state, state.focused_window, selection_id, c);
                             shift_selection(
                                 state,
-                                state.focused,
+                                state.focused_window,
                                 selection_id,
                                 Movement::Right(1),
                             )?;
@@ -373,32 +388,32 @@ fn handle_event(state: &mut State, event: Event) -> Result {
                         Mode::Append => {
                             move_selection(
                                 state,
-                                state.focused,
+                                state.focused_window,
                                 selection_id,
                                 Movement::Right(1),
                                 true,
                             )?;
-                            insert_char_after(state, state.focused, selection_id, c);
+                            insert_char_after(state, state.focused_window, selection_id, c);
                         }
                         _ => unreachable!(),
                     }
                 }
             }
             Event::Key(Key::Backspace) => {
-                move_selections(state, state.focused, Movement::Left(1), false)?;
-                delete_selections(state, state.focused);
+                move_selections(state, state.focused_window, Movement::Left(1), false)?;
+                delete_selections(state, state.focused_window);
             }
             _ => {}
         },
         Mode::Command => match event {
             Event::Key(Key::Esc) => {
-                state.windows[state.focused].command.clear();
-                set_mode(state, state.focused, Mode::Normal);
+                state.windows[state.focused_window].command.clear();
+                set_mode(state, state.focused_window, Mode::Normal);
             }
             Event::Key(Key::Char('\t')) => {}
             Event::Key(Key::Char('\n')) => {
-                let command = take(&mut state.windows[state.focused].command);
-                set_mode(state, state.focused, Mode::Normal);
+                let command = take(&mut state.windows[state.focused_window].command);
+                set_mode(state, state.focused_window, Mode::Normal);
                 let command = shlex(&command)
                     .ok_or_else(|| format_err!("failed to parse command '{}'", command))?;
                 trace!("command: {:?}", command);
@@ -406,11 +421,11 @@ fn handle_event(state: &mut State, event: Event) -> Result {
                 run_command(state, &command)?;
             }
             Event::Key(Key::Char(c)) => {
-                state.windows[state.focused].command.push(c);
+                state.windows[state.focused_window].command.push(c);
             }
             Event::Key(Key::Backspace) => {
-                if state.windows[state.focused].command.pop().is_none() {
-                    set_mode(state, state.focused, Mode::Normal);
+                if state.windows[state.focused_window].command.pop().is_none() {
+                    set_mode(state, state.focused_window, Mode::Normal);
                 } else {
                 }
             }
@@ -445,7 +460,7 @@ fn draw(state: &mut State) -> Result {
             y: height - 1,
         },
     };
-    draw_window(state, state.focused, region)?;
+    draw_window(state, state.focused_window, region)?;
     state.last_screen_height = Some(region.height());
 
     let region = Rect {
@@ -457,40 +472,29 @@ fn draw(state: &mut State) -> Result {
     };
     draw_status(state, region)?;
 
-    state.output.flush()?;
+    state.tty.flush()?;
     Ok(())
 }
 
 fn draw_tabs(state: &mut State, region: Rect) -> Result {
-    write!(
-        state.output,
-        "{}{}",
-        region.start.goto(),
-        clear::CurrentLine
-    )?;
+    write!(state.tty, "{}{}", region.start.goto(), clear::CurrentLine)?;
     for window_id in (0..state.windows.len()).map(WindowId) {
         let window = &state.windows[window_id];
         let buffer = &state.buffers[window.buffer];
-        if window_id == state.focused {
-            write!(
-                state.output,
-                "{}{}{} ",
-                style::Bold,
-                buffer.name,
-                style::Reset,
-            )?;
+        if window_id == state.focused_window {
+            write!(state.tty, "{}{}{} ", style::Bold, buffer.name, style::Reset,)?;
         } else {
-            write!(state.output, "{} ", buffer.name)?;
+            write!(state.tty, "{} ", buffer.name)?;
         }
     }
-    state.tabline_dirty = false;
+    state.tabline_needs_redraw = false;
     Ok(())
 }
 
 fn draw_status(state: &mut State, region: Rect) -> Result {
-    if let Some((_importance, message)) = state.message.take() {
+    if let Some((_importance, message)) = state.pending_message.take() {
         write!(
-            state.output,
+            state.tty,
             "{}{}{}{} {} {}",
             region.start.goto(),
             clear::CurrentLine,
@@ -500,7 +504,7 @@ fn draw_status(state: &mut State, region: Rect) -> Result {
             style::Reset,
         )?;
     } else {
-        let mode = state.windows[state.focused].mode;
+        let mode = state.windows[state.focused_window].mode;
         let color: &dyn Color = match mode {
             Mode::Normal => &color::White,
             Mode::Insert => &color::LightYellow,
@@ -509,7 +513,7 @@ fn draw_status(state: &mut State, region: Rect) -> Result {
             Mode::Command => &color::White,
         };
         write!(
-            state.output,
+            state.tty,
             "{}{}{}{} {:?} {}",
             region.start.goto(),
             clear::CurrentLine,
@@ -521,16 +525,16 @@ fn draw_status(state: &mut State, region: Rect) -> Result {
         match mode {
             Mode::Command => {
                 write!(
-                    state.output,
+                    state.tty,
                     " :{}{} {}",
-                    state.windows[state.focused].command,
+                    state.windows[state.focused_window].command,
                     style::Invert,
                     style::Reset,
                 )?;
             }
             _ => {}
         }
-        state.statusline_dirty = false;
+        state.statusline_needs_redraw = false;
     }
     Ok(())
 }
@@ -556,13 +560,13 @@ fn draw_window(state: &mut State, window_id: WindowId, region: Rect) -> Result {
         .map(|(line, text)| (line + window.top.zero_based(), text));
     let mut range_y = region.range_y();
     'outer: while let Some(y) = range_y.next() {
-        write!(state.output, "{}{}", cursor::Goto(1, y), clear::CurrentLine)?;
+        write!(state.tty, "{}{}", cursor::Goto(1, y), clear::CurrentLine)?;
         if let Some((line, text)) = lines.next() {
             let mut chars = text.chars().enumerate();
             let mut col = 0;
             while let Some((file_col, mut c)) = chars.next() {
                 if col == region.width() as usize + 1 {
-                    write!(state.output, "\r\n{}", clear::CurrentLine)?;
+                    write!(state.tty, "\r\n{}", clear::CurrentLine)?;
                     if range_y.next().is_none() {
                         break 'outer;
                     }
@@ -582,18 +586,18 @@ fn draw_window(state: &mut State, window_id: WindowId, region: Rect) -> Result {
                     .any(|s| s.contains(pos))
                 {
                     if c == '\t' {
-                        write!(state.output, "{}    {}", style::Invert, style::Reset)?;
+                        write!(state.tty, "{}    {}", style::Invert, style::Reset)?;
                         col += 4;
                     } else {
-                        write!(state.output, "{}{}{}", style::Invert, c, style::Reset)?;
+                        write!(state.tty, "{}{}{}", style::Invert, c, style::Reset)?;
                         col += 1;
                     }
                 } else {
                     if c == '\t' {
-                        write!(state.output, "    ")?;
+                        write!(state.tty, "    ")?;
                         col += 4;
                     } else {
-                        write!(state.output, "{}", c)?;
+                        write!(state.tty, "{}", c)?;
                         col += 1;
                     }
                 }
@@ -604,11 +608,11 @@ fn draw_window(state: &mut State, window_id: WindowId, region: Rect) -> Result {
 }
 
 pub fn show_message(state: &mut State, importance: Importance, message: String) {
-    state.message = Some((importance, message));
+    state.pending_message = Some((importance, message));
 }
 
 pub fn quit(state: &mut State) {
-    state.exit.0.send(()).unwrap();
+    state.exit_channels.0.send(()).unwrap();
 }
 
 pub fn set_mode(state: &mut State, window: WindowId, mode: Mode) {
@@ -778,7 +782,7 @@ pub fn undo(state: &mut State, window_id: WindowId) {
 impl Drop for State {
     fn drop(&mut self) {
         _ = write!(
-            self.output,
+            self.tty,
             "{}{}{}",
             cursor::Show,
             cursor::SteadyBlock,
@@ -940,7 +944,7 @@ const COMMANDS: &[CommandDesc] = &[
             };
             let window_id = WindowId(cx.editor.windows.len());
             cx.editor.windows.push(window);
-            cx.editor.focused = window_id;
+            cx.editor.focused_window = window_id;
             Ok(())
         },
     },

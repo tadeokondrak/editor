@@ -108,7 +108,7 @@ pub fn new() -> Result<State> {
     })
 }
 
-pub fn run(mut state: State) -> Result {
+pub fn run(mut state: State) -> Result<()> {
     fn handle_next_event(state: &mut State) -> Result<bool> {
         select! {
             recv(state.inputs) -> input => handle_event(state, input??)?,
@@ -138,7 +138,7 @@ pub fn run(mut state: State) -> Result {
     }
 }
 
-fn run_command(state: &mut State, args: &[&str]) -> Result {
+fn run_command(state: &mut State, args: &[&str]) -> Result<()> {
     let name = args.first().copied().context("no command given")?;
     let cmd = COMMANDS
         .iter()
@@ -154,7 +154,7 @@ fn run_command(state: &mut State, args: &[&str]) -> Result {
     Ok(())
 }
 
-fn handle_event(state: &mut State, event: Event) -> Result {
+fn handle_event(state: &mut State, event: Event) -> Result<()> {
     trace!("event: {:?}", event);
 
     const SHIFT_UP: &[u8] = &[27, 91, 49, 59, 50, 65];
@@ -475,7 +475,7 @@ fn handle_event(state: &mut State, event: Event) -> Result {
     Ok(())
 }
 
-fn handle_signal(state: &mut State, signal: c_int) -> Result {
+fn handle_signal(state: &mut State, signal: c_int) -> Result<()> {
     info!("received signal: {}", signal);
     #[allow(clippy::single_match)]
     match signal {
@@ -485,7 +485,7 @@ fn handle_signal(state: &mut State, signal: c_int) -> Result {
     Ok(())
 }
 
-fn draw(state: &mut State) -> Result {
+fn draw(state: &mut State) -> Result<()> {
     let (width, height) = terminal_size()?;
 
     let region = Rect {
@@ -517,7 +517,7 @@ fn draw(state: &mut State) -> Result {
     Ok(())
 }
 
-fn draw_tabs(state: &mut State, region: Rect) -> Result {
+fn draw_tabs(state: &mut State, region: Rect) -> Result<()> {
     write!(state.tty, "{}{}", region.start.goto(), clear::CurrentLine)?;
     for (window_id, window) in state.windows.iter_with_handles() {
         let buffer = &state.buffers[window.buffer];
@@ -531,7 +531,7 @@ fn draw_tabs(state: &mut State, region: Rect) -> Result {
     Ok(())
 }
 
-fn draw_status(state: &mut State, region: Rect) -> Result {
+fn draw_status(state: &mut State, region: Rect) -> Result<()> {
     if let Some((_importance, message)) = state.pending_message.take() {
         write!(
             state.tty,
@@ -580,7 +580,7 @@ fn draw_status(state: &mut State, region: Rect) -> Result {
     Ok(())
 }
 
-fn draw_window(state: &mut State, window_id: WindowId, region: Rect) -> Result {
+fn draw_window(state: &mut State, window_id: WindowId, region: Rect) -> Result<()> {
     // TODO: draw a block where the next character will go in insert mode
     let window = &mut state.windows[window_id];
     {
@@ -831,7 +831,7 @@ pub struct CommandDesc {
     description: &'static str,
     #[allow(dead_code)]
     required_arguments: usize,
-    run: fn(cx: Context, args: &[&str]) -> Result,
+    run: fn(cx: Context, args: &[&str]) -> Result<()>,
 }
 
 const COMMANDS: &[CommandDesc] = &[

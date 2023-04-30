@@ -1,4 +1,4 @@
-use crate::edot::Buffer;
+use crate::Buffer;
 use ropey::{Rope, RopeSlice};
 use std::{
     mem::swap,

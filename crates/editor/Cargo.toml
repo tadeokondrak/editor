@@ -1,0 +1,22 @@
+[package]
+name = "editor"
+version = "0.0.0"
+authors = ["Tadeo Kondrak <me@tadeo.ca>"]
+edition = "2018"
+
+[dependencies]
+ropey = "1.1"
+anyhow = "1.0"
+termion = "1.5.5"
+thiserror = "1.0"
+signal-hook = "0.1.13"
+crossbeam-channel = "0.4.2"
+log = "0.4.8"
+shlex = "0.1.1"
+toml = "0.5.6"
+xdg = "2.2.0"
+handy = "0.1.4"
+
+[dependencies.env_logger]
+version = "0.7.1"
+default-features = false

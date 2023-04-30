@@ -1,8 +1,6 @@
-use crate::{
-    location::{Column, Line, Movement, MovementError, Position, Selection},
-    terminal::{Point, Rect},
-    Result,
-};
+mod location;
+mod terminal;
+
 use anyhow::{format_err, Context as _};
 use crossbeam_channel::{select, unbounded, Receiver, Sender};
 use handy::typed::{TypedHandle, TypedHandleMap};
@@ -31,6 +29,12 @@ use termion::{
     raw::{IntoRawMode, RawTerminal},
     screen, style, terminal_size,
 };
+use {
+    location::{Column, Line, Movement, MovementError, Position, Selection},
+    terminal::{Point, Rect},
+};
+
+type Result<T, E = anyhow::Error> = anyhow::Result<T, E>;
 
 pub struct State {
     signals: Receiver<c_int>,
@@ -50,59 +54,59 @@ pub struct State {
 type WindowId = TypedHandle<Window>;
 type BufferId = TypedHandle<Buffer>;
 
-pub fn new() -> Result<State> {
-    let (signals, signal) = unbounded();
-    let (inputs, input) = unbounded();
-    let signal_iter = Signals::new([SIGWINCH])?;
-    thread::spawn(move || {
-        for signal in signal_iter.forever() {
-            signals.send(signal).unwrap();
+fn main() -> Result<()> {
+    env_logger::init();
+    let mut state = {
+        let (signals, signal) = unbounded();
+        let (inputs, input) = unbounded();
+        let signal_iter = Signals::new([SIGWINCH])?;
+        thread::spawn(move || {
+            for signal in signal_iter.forever() {
+                signals.send(signal).unwrap();
+            }
+        });
+        let tty = get_tty()?;
+        thread::spawn(move || {
+            for event in tty.events() {
+                inputs.send(event).unwrap();
+            }
+        });
+        let mut windows = TypedHandleMap::new();
+        let mut buffers = TypedHandleMap::new();
+        let scratch_buffer = buffers.insert(Buffer {
+            content: Rope::from("\n"),
+            name: String::from("scratch"),
+            history: History::default(),
+            path: None,
+        });
+        let mut selections = TypedHandleMap::new();
+        let primary_selection = selections.insert(Selection {
+            start: Position::file_start(),
+            end: Position::file_start(),
+        });
+        let focused_window = windows.insert(Window {
+            buffer: scratch_buffer,
+            mode: Mode::Normal,
+            selections,
+            primary_selection,
+            command: String::new(),
+            top: Line::from_one_based(1),
+        });
+        State {
+            signals: signal,
+            inputs: input,
+            exit_channels: unbounded(),
+            windows,
+            buffers,
+            open_tabs: vec![focused_window],
+            focused_tab: 0,
+            tty: get_tty()?.into_raw_mode()?,
+            tabline_needs_redraw: true,
+            statusline_needs_redraw: true,
+            last_screen_height: None,
+            pending_message: None,
         }
-    });
-    let tty = get_tty()?;
-    thread::spawn(move || {
-        for event in tty.events() {
-            inputs.send(event).unwrap();
-        }
-    });
-    let mut windows = TypedHandleMap::new();
-    let mut buffers = TypedHandleMap::new();
-    let scratch_buffer = buffers.insert(Buffer {
-        content: Rope::from("\n"),
-        name: String::from("scratch"),
-        history: History::new(),
-        path: None,
-    });
-    let mut selections = TypedHandleMap::new();
-    let primary_selection = selections.insert(Selection {
-        start: Position::file_start(),
-        end: Position::file_start(),
-    });
-    let focused_window = windows.insert(Window {
-        buffer: scratch_buffer,
-        mode: Mode::Normal,
-        selections,
-        primary_selection,
-        command: String::new(),
-        top: Line::from_one_based(1),
-    });
-    Ok(State {
-        signals: signal,
-        inputs: input,
-        exit_channels: unbounded(),
-        windows,
-        buffers,
-        open_tabs: vec![focused_window],
-        focused_tab: 0,
-        tty: get_tty()?.into_raw_mode()?,
-        tabline_needs_redraw: true,
-        statusline_needs_redraw: true,
-        last_screen_height: None,
-        pending_message: None,
-    })
-}
-
-pub fn run(mut state: State) -> Result<()> {
+    };
     fn handle_next_event(state: &mut State) -> Result<bool> {
         select! {
             recv(state.inputs) -> input => handle_event(state, input??)?,
@@ -746,17 +750,12 @@ pub struct Buffer {
 
 pub struct NothingLeftToUndo;
 
+#[derive(Default)]
 pub struct History {
     edits: VecDeque<Edit>,
 }
 
 impl History {
-    pub fn new() -> Self {
-        Self {
-            edits: VecDeque::new(),
-        }
-    }
-
     pub fn insert_char(&mut self, rope: &mut Rope, pos: Position, c: char) {
         rope.insert_char(pos.char_of(rope), c);
         self.push_back(Edit::Insert {
@@ -854,7 +853,7 @@ const COMMANDS: &[CommandDesc] = &[
                 path: Some(path),
                 name,
                 content: Rope::from_reader(reader)?,
-                history: History::new(),
+                history: History::default(),
             };
             let buffer_id = cx.editor.buffers.insert(buffer);
             let mut selections = TypedHandleMap::new();

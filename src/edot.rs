@@ -75,14 +75,8 @@ pub fn new() -> Result<State> {
     });
     let mut selections = TypedHandleMap::new();
     let primary_selection = selections.insert(Selection {
-        start: Position {
-            line: Line::from_one_based(1),
-            column: Column::from_one_based(1),
-        },
-        end: Position {
-            line: Line::from_one_based(1),
-            column: Column::from_one_based(1),
-        },
+        start: Position::file_start(),
+        end: Position::file_start(),
     });
     let focused_window = windows.insert(Window {
         buffer: scratch_buffer,

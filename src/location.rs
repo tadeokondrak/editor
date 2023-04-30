@@ -128,7 +128,6 @@ pub struct Position {
 }
 
 impl Position {
-    #[allow(dead_code)]
     pub fn file_start() -> Self {
         Self {
             line: Line::from_one_based(1),

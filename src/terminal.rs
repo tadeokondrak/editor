@@ -28,6 +28,7 @@ impl Rect {
         self.end.y - self.start.y
     }
 
+    #[allow(dead_code)]
     pub fn range_x(self) -> RangeInclusive<u16> {
         self.start.x..=self.end.x
     }

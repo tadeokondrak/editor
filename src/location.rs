@@ -79,11 +79,12 @@ pub struct Line(NonZeroUsize);
 newtype_impl!(Line);
 
 impl Line {
+    #[allow(dead_code)]
     pub fn range_of(self, rope: &Rope) -> Range<usize> {
         self.char_of(rope)..self.char_of(rope) + self.slice_of(rope).len_chars()
     }
 
-    pub fn slice_of<'a>(self, rope: &'a Rope) -> RopeSlice<'a> {
+    pub fn slice_of(self, rope: &Rope) -> RopeSlice<'_> {
         rope.line(self.zero_based())
     }
 
@@ -91,6 +92,7 @@ impl Line {
         rope.line_to_char(self.zero_based())
     }
 
+    #[allow(dead_code)]
     pub fn remove_from(self, _buffer: &mut Buffer) {
         todo!()
     }
@@ -126,6 +128,7 @@ pub struct Position {
 }
 
 impl Position {
+    #[allow(dead_code)]
     pub fn file_start() -> Self {
         Self {
             line: Line::from_one_based(1),
@@ -141,6 +144,7 @@ impl Position {
         self.column.one_based() <= self.line.slice_of(rope).len_chars()
     }
 
+    #[allow(dead_code)]
     pub fn is_full_line(self, rope: &Rope) -> bool {
         self.line.slice_of(rope).len_chars() == self.column.zero_based()
     }
@@ -297,7 +301,7 @@ impl Selection {
         self.start.char_of(rope)..self.end.char_of(rope) + 1
     }
 
-    pub fn slice_of<'a>(self, rope: &'a Rope) -> RopeSlice<'a> {
+    pub fn slice_of(self, rope: &Rope) -> RopeSlice<'_> {
         rope.slice(self.range_of(rope))
     }
 
@@ -307,6 +311,7 @@ impl Selection {
         }
     }
 
+    #[allow(dead_code)]
     pub fn ordered(mut self) -> Self {
         self.order();
         self
@@ -321,11 +326,13 @@ impl Selection {
         swap(&mut self.start, &mut self.end);
     }
 
+    #[allow(dead_code)]
     pub fn flipped(mut self) -> Self {
         self.flip();
         self
     }
 
+    #[allow(dead_code)]
     pub fn is_ordered(self) -> bool {
         let ordered = self.ordered();
         self.start <= ordered.end
@@ -354,6 +361,19 @@ impl Selection {
         self.end = self.start;
         self.validate_fix(buffer);
         // TODO: the file must be terminated by a final newline
+    }
+
+    pub fn move_to(
+        &mut self,
+        rope: &Rope,
+        movement: Movement,
+        should_drag: bool,
+    ) -> Result<(), MovementError> {
+        self.end.move_to(rope, movement)?;
+        if !should_drag {
+            self.start = self.end;
+        }
+        Ok(())
     }
 }
 

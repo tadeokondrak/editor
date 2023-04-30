@@ -80,6 +80,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "env_logger",
+ "handy",
  "log",
  "ropey",
  "shlex",
@@ -109,6 +110,12 @@ dependencies = [
  "libc",
  "wasi",
 ]
+
+[[package]]
+name = "handy"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58b6dbb5a83491d0670ee48d250c6636b49418f0515798b98378265164a86e08"
 
 [[package]]
 name = "lazy_static"

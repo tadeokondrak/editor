@@ -10,7 +10,6 @@ use shlex::split as shlex;
 use signal_hook::{iterator::Signals, SIGWINCH};
 use std::{
     collections::VecDeque,
-    convert::Infallible,
     fmt::Debug,
     fs::{File, OpenOptions},
     io::{self, Write as _},

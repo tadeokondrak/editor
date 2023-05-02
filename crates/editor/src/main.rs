@@ -36,6 +36,10 @@ use {
 
 type Result<T, E = anyhow::Error> = anyhow::Result<T, E>;
 
+type WindowId = TypedHandle<Window>;
+type BufferId = TypedHandle<Buffer>;
+type SelectionId = TypedHandle<Selection>;
+
 pub struct State {
     signals: Receiver<c_int>,
     inputs: Receiver<io::Result<Event>>,
@@ -51,8 +55,63 @@ pub struct State {
     pending_message: Option<(Importance, String)>,
 }
 
-type WindowId = TypedHandle<Window>;
-type BufferId = TypedHandle<Buffer>;
+pub struct Window {
+    buffer: BufferId,
+    mode: Mode,
+    selections: TypedHandleMap<Selection>,
+    primary_selection: SelectionId,
+    command: String,
+    top: Line,
+}
+
+pub struct Buffer {
+    pub path: Option<PathBuf>,
+    pub name: String,
+    pub content: Rope,
+    pub history: History,
+}
+
+pub struct NothingLeftToUndo;
+
+#[derive(Default)]
+pub struct History {
+    edits: VecDeque<Edit>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Edit {
+    Insert { pos: Position, text: String },
+    Delete { pos: Position, text: String },
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Mode {
+    Normal,
+    Insert,
+    Append,
+    Goto { selecting: bool },
+    Command,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum Importance {
+    Error,
+}
+
+pub struct Context<'a> {
+    editor: &'a mut State,
+    window: WindowId,
+}
+
+pub struct CommandDesc {
+    name: &'static str,
+    aliases: &'static [&'static str],
+    #[allow(dead_code)]
+    description: &'static str,
+    #[allow(dead_code)]
+    required_arguments: usize,
+    run: fn(cx: Context, args: &[&str]) -> Result<()>,
+}
 
 fn main() -> Result<()> {
     env_logger::init();
@@ -151,6 +210,176 @@ fn run_command(state: &mut State, args: &[&str]) -> Result<()> {
     )
 }
 
+#[allow(dead_code)]
+fn move_to(state: &mut State, movement: Movement, selecting: bool) -> Result<(), MovementError> {
+    try_for_each_selection_in_focused_window(state, |buffer, selection| {
+        selection.move_to(&buffer.content, movement, selecting)
+    })
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Copy, Clone)]
+enum Action {
+    // Window actions
+    Editor_PreviousTab,
+    Editor_NextTab,
+    // Buffer actions
+    Buffer_Undo,
+    Buffer_Redo,
+    // Window actions
+    Window_InsertAtSelectionStart(char),
+    Window_InsertAtSelectionEnd(char),
+    Window_Delete,
+    Window_Move(Movement),
+    Window_ShiftStart(Movement),
+    Window_ShiftEnd(Movement),
+    Window_ScrollPageUp,
+    Window_ScrollPageDown,
+    Window_ScrollHalfPageUp,
+    Window_ScrollHalfPageDown,
+    Window_OrderSelections,
+    Window_SwitchToMode(Mode),
+    // Command actions
+    Command_Character(char),
+    Command_Clear,
+    Command_Tab,
+    Command_Return,
+    Command_Backspace,
+}
+
+fn do_action(state: &mut State, action: Action) -> Result<()> {
+    match action {
+        Action::Editor_PreviousTab => {
+            state.focused_tab = (state.focused_tab - 1) % state.open_tabs.len();
+            Ok(())
+        }
+        Action::Editor_NextTab => {
+            state.focused_tab = (state.focused_tab + 1) % state.open_tabs.len();
+            Ok(())
+        }
+        Action::Buffer_Undo => {
+            undo(state, state.open_tabs[state.focused_tab]);
+            Ok(())
+        }
+        Action::Buffer_Redo => {
+            redo(state, state.open_tabs[state.focused_tab]);
+            Ok(())
+        }
+        action @ (Action::Window_InsertAtSelectionStart(_)
+        | Action::Window_InsertAtSelectionEnd(_)
+        | Action::Window_Delete
+        | Action::Window_Move(_)
+        | Action::Window_ShiftStart(_)
+        | Action::Window_ShiftEnd(_)
+        | Action::Window_ScrollPageUp
+        | Action::Window_ScrollPageDown
+        | Action::Window_ScrollHalfPageUp
+        | Action::Window_ScrollHalfPageDown
+        | Action::Window_OrderSelections) => {
+            let window_id = state.open_tabs[state.focused_tab];
+            let window = &mut state.windows[window_id];
+            let buffer = &mut state.buffers[window.buffer];
+            for selection in window.selections.iter_mut() {
+                match action {
+                    Action::Window_InsertAtSelectionStart(c) => {
+                        selection.start.insert_char(buffer, c);
+                    }
+                    Action::Window_InsertAtSelectionEnd(c) => {
+                        selection.end.insert_char(buffer, c);
+                    }
+                    Action::Window_Delete => {
+                        selection.remove_from(buffer);
+                    }
+                    Action::Window_Move(movement) => {
+                        selection.end.move_to(&buffer.content, movement)?;
+                        selection.start = selection.end;
+                    }
+                    Action::Window_ShiftStart(movement) => {
+                        selection.start.move_to(&buffer.content, movement)?;
+                    }
+                    Action::Window_ShiftEnd(movement) => {
+                        selection.end.move_to(&buffer.content, movement)?;
+                    }
+                    Action::Window_ScrollPageUp
+                    | Action::Window_ScrollPageDown
+                    | Action::Window_ScrollHalfPageUp
+                    | Action::Window_ScrollHalfPageDown => {
+                        if let Some(height) = state.last_screen_height {
+                            let height = usize::from(height);
+                            let movement = match action {
+                                Action::Window_ScrollPageUp => Movement::Up(height),
+                                Action::Window_ScrollPageDown => Movement::Down(height),
+                                Action::Window_ScrollHalfPageUp => Movement::Up(height / 2),
+                                Action::Window_ScrollHalfPageDown => Movement::Down(height / 2),
+                                _ => unreachable!(),
+                            };
+                            selection.end.move_to(&buffer.content, movement)?;
+                            selection.start = selection.end;
+                        }
+                    }
+                    Action::Window_OrderSelections => {
+                        selection.order();
+                    }
+                    Action::Window_SwitchToMode(_)
+                    | Action::Editor_PreviousTab
+                    | Action::Editor_NextTab
+                    | Action::Buffer_Undo
+                    | Action::Buffer_Redo
+                    | Action::Command_Character(_)
+                    | Action::Command_Clear
+                    | Action::Command_Tab
+                    | Action::Command_Return
+                    | Action::Command_Backspace => {
+                        unreachable!()
+                    }
+                }
+            }
+            Ok(())
+        }
+        Action::Window_SwitchToMode(mode) => {
+            state.windows[state.open_tabs[state.focused_tab]].mode = mode;
+            Ok(())
+        }
+        Action::Command_Character(c) => {
+            state.windows[state.open_tabs[state.focused_tab]]
+                .command
+                .push(c);
+            Ok(())
+        }
+        Action::Command_Clear => {
+            state.windows[state.open_tabs[state.focused_tab]]
+                .command
+                .clear();
+            Ok(())
+        }
+        Action::Command_Tab => {
+            // TODO
+            Ok(())
+        }
+        Action::Command_Return => {
+            let command = take(&mut state.windows[state.open_tabs[state.focused_tab]].command);
+            state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Normal;
+            let command = shlex(&command)
+                .ok_or_else(|| format_err!("failed to parse command '{}'", command))?;
+            trace!("command: {:?}", command);
+            let command = command.iter().map(|x| &**x).collect::<Vec<&str>>();
+            run_command(state, &command)?;
+            Ok(())
+        }
+        Action::Command_Backspace => {
+            if state.windows[state.open_tabs[state.focused_tab]]
+                .command
+                .pop()
+                .is_none()
+            {
+                let mode: Mode = Mode::Normal;
+                state.windows[state.open_tabs[state.focused_tab]].mode = mode;
+            }
+            Ok(())
+        }
+    }
+}
+
 fn handle_event(state: &mut State, event: Event) -> Result<()> {
     trace!("event: {:?}", event);
 
@@ -159,148 +388,59 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
     const SHIFT_RIGHT: &[u8] = &[27, 91, 49, 59, 50, 67];
     const SHIFT_LEFT: &[u8] = &[27, 91, 49, 59, 50, 68];
 
-    'arrows: {
-        if let Mode::Normal | Mode::Insert | Mode::Append =
-            state.windows[state.open_tabs[state.focused_tab]].mode
-        {
-            match event {
-                Event::Key(Key::Left) => {
-                    try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                        selection.move_to(&buffer.content, Movement::Left(1), false)
-                    })
-                }?,
-                Event::Key(Key::Down) => {
-                    try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                        selection.move_to(&buffer.content, Movement::Down(1), false)
-                    })
-                }?,
-                Event::Key(Key::Up) => {
-                    try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                        selection.move_to(&buffer.content, Movement::Up(1), false)
-                    })
-                }?,
-                Event::Key(Key::Right) => {
-                    try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                        selection.move_to(&buffer.content, Movement::Right(1), false)
-                    })
-                }?,
-                Event::Key(Key::Ctrl('u')) => {
-                    if let Some(height) = state.last_screen_height {
-                        with_primary_selection_in_focused_window(state, |buffer, selection| {
-                            selection.move_to(
-                                &buffer.content,
-                                Movement::Up(usize::from(height / 2)),
-                                false,
-                            )
-                        })?;
-                    }
-                }
-                Event::Key(Key::Ctrl('d')) => {
-                    if let Some(height) = state.last_screen_height {
-                        with_primary_selection_in_focused_window(state, |buffer, selection| {
-                            selection.move_to(
-                                &buffer.content,
-                                Movement::Down(usize::from(height / 2)),
-                                false,
-                            )
-                        })?;
-                    }
-                }
-                Event::Key(Key::Ctrl('b') | Key::PageUp) => {
-                    if let Some(height) = state.last_screen_height {
-                        with_primary_selection_in_focused_window(state, |buffer, selection| {
-                            selection.move_to(
-                                &buffer.content,
-                                Movement::Up(usize::from(height)),
-                                false,
-                            )
-                        })?;
-                    }
-                }
-                Event::Key(Key::Ctrl('f') | Key::PageDown) => {
-                    if let Some(height) = state.last_screen_height {
-                        with_primary_selection_in_focused_window(state, |buffer, selection| {
-                            selection.move_to(
-                                &buffer.content,
-                                Movement::Down(usize::from(height)),
-                                false,
-                            )
-                        })?;
-                    }
-                }
-                Event::Key(Key::Ctrl('p')) => {
-                    state.focused_tab = (state.focused_tab - 1) % state.open_tabs.len();
-                }
-                Event::Key(Key::Ctrl('n')) => {
-                    state.focused_tab = (state.focused_tab + 1) % state.open_tabs.len();
-                }
-                Event::Unsupported(keys) => match keys.as_slice() {
-                    SHIFT_LEFT => {
-                        try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                            selection.move_to(&buffer.content, Movement::Left(1), true)
-                        })?
-                    }
-                    SHIFT_DOWN => {
-                        try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                            selection.move_to(&buffer.content, Movement::Down(1), true)
-                        })?
-                    }
-                    SHIFT_UP => {
-                        try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                            selection.move_to(&buffer.content, Movement::Up(1), true)
-                        })?
-                    }
-                    SHIFT_RIGHT => {
-                        try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                            selection.move_to(&buffer.content, Movement::Right(1), true)
-                        })?
-                    }
-                    _ => {}
-                },
-                _ => break 'arrows,
+    let mut actions = Vec::new();
+
+    if let Mode::Normal | Mode::Insert | Mode::Append =
+        state.windows[state.open_tabs[state.focused_tab]].mode
+    {
+        match &event {
+            Event::Key(Key::Left) => actions.push(Action::Window_Move(Movement::Left(1))),
+            Event::Key(Key::Down) => actions.push(Action::Window_Move(Movement::Down(1))),
+            Event::Key(Key::Up) => actions.push(Action::Window_Move(Movement::Up(1))),
+            Event::Key(Key::Right) => actions.push(Action::Window_Move(Movement::Right(1))),
+            Event::Key(Key::Ctrl('u')) => actions.push(Action::Window_ScrollHalfPageUp),
+            Event::Key(Key::Ctrl('d')) => actions.push(Action::Window_ScrollHalfPageDown),
+            Event::Key(Key::Ctrl('b') | Key::PageUp) => actions.push(Action::Window_ScrollPageUp),
+            Event::Key(Key::Ctrl('f') | Key::PageDown) => {
+                actions.push(Action::Window_ScrollPageDown)
             }
-            return Ok(());
+            Event::Key(Key::Ctrl('p')) => actions.push(Action::Editor_PreviousTab),
+            Event::Key(Key::Ctrl('n')) => actions.push(Action::Editor_NextTab),
+            Event::Unsupported(keys) => match keys.as_slice() {
+                SHIFT_LEFT => actions.push(Action::Window_ShiftEnd(Movement::Left(1))),
+                SHIFT_DOWN => actions.push(Action::Window_ShiftEnd(Movement::Down(1))),
+                SHIFT_UP => actions.push(Action::Window_ShiftEnd(Movement::Up(1))),
+                SHIFT_RIGHT => actions.push(Action::Window_ShiftEnd(Movement::Right(1))),
+                _ => {}
+            },
+            _ => {}
         }
     }
 
     match state.windows[state.open_tabs[state.focused_tab]].mode {
         Mode::Normal => match event {
             Event::Key(Key::Char('i')) => {
-                for_each_selection_in_focused_window(state, |_buffer, selection| {
-                    selection.order();
-                });
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Insert;
+                actions.push(Action::Window_OrderSelections);
+                actions.push(Action::Window_SwitchToMode(Mode::Insert));
             }
             Event::Key(Key::Char('c')) => {
-                for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.remove_from(buffer);
-                });
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Insert;
+                actions.push(Action::Window_Delete);
+                actions.push(Action::Window_SwitchToMode(Mode::Insert));
             }
             Event::Key(Key::Char('a')) => {
-                for_each_selection_in_focused_window(state, |_buffer, selection| {
-                    selection.order();
-                });
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Append;
+                actions.push(Action::Window_OrderSelections);
+                actions.push(Action::Window_SwitchToMode(Mode::Append));
             }
             Event::Key(Key::Char('A')) => {
-                try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.move_to(&buffer.content, Movement::LineEnd, false)
-                })?;
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Insert;
+                actions.push(Action::Window_Move(Movement::LineEnd));
+                actions.push(Action::Window_SwitchToMode(Mode::Insert));
             }
             Event::Key(Key::Char('o')) => {
-                try_for_each_selection_in_focused_window::<_, MovementError>(
-                    state,
-                    |buffer, selection| {
-                        selection.move_to(&buffer.content, Movement::LineEnd, false)?;
-                        selection.end.insert_char(buffer, '\n');
-                        selection.move_to(&buffer.content, Movement::Down(1), false)?;
-                        selection.move_to(&buffer.content, Movement::LineStart, false)?;
-                        Ok(())
-                    },
-                )?;
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Insert;
+                actions.push(Action::Window_Move(Movement::LineEnd));
+                actions.push(Action::Window_InsertAtSelectionEnd('\n'));
+                actions.push(Action::Window_Move(Movement::Down(1)));
+                actions.push(Action::Window_Move(Movement::LineStart));
+                actions.push(Action::Window_SwitchToMode(Mode::Insert));
             }
             Event::Key(Key::Char('x')) => {
                 //self.move_selections(self.focused, Movement::Line, false)?;
@@ -309,165 +449,81 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
                 //self.move_selections(self.focused, Movement::Line, true)?;
             }
             Event::Key(Key::Char('g')) => {
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Goto { drag: false };
+                actions.push(Action::Window_SwitchToMode(Mode::Goto { selecting: false }));
             }
             Event::Key(Key::Char('G')) => {
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Goto { drag: true };
+                actions.push(Action::Window_SwitchToMode(Mode::Goto { selecting: true }));
             }
-            Event::Key(Key::Char(':')) => {
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Command;
-            }
-            Event::Key(Key::Char('h')) => {
-                try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.move_to(&buffer.content, Movement::Left(1), false)
-                })?
-            }
-            Event::Key(Key::Char('j')) => {
-                try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.move_to(&buffer.content, Movement::Down(1), false)
-                })?
-            }
-            Event::Key(Key::Char('k')) => {
-                try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.move_to(&buffer.content, Movement::Up(1), false)
-                })?
-            }
-            Event::Key(Key::Char('l')) => {
-                try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.move_to(&buffer.content, Movement::Right(1), false)
-                })?
-            }
-            Event::Key(Key::Char('H')) => {
-                try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.move_to(&buffer.content, Movement::Left(1), true)
-                })?
-            }
-            Event::Key(Key::Char('J')) => {
-                try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.move_to(&buffer.content, Movement::Down(1), true)
-                })?
-            }
-            Event::Key(Key::Char('K')) => {
-                try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.move_to(&buffer.content, Movement::Up(1), true)
-                })?
-            }
-            Event::Key(Key::Char('L')) => {
-                try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.move_to(&buffer.content, Movement::Right(1), true)
-                })?
-            }
-            Event::Key(Key::Char('d')) => {
-                for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.remove_from(buffer);
-                });
-            }
-            Event::Key(Key::Char('u')) => {
-                undo(state, state.open_tabs[state.focused_tab]);
-            }
+            Event::Key(Key::Char(':')) => actions.push(Action::Window_SwitchToMode(Mode::Command)),
+            Event::Key(Key::Char('h')) => actions.push(Action::Window_Move(Movement::Left(1))),
+            Event::Key(Key::Char('j')) => actions.push(Action::Window_Move(Movement::Down(1))),
+            Event::Key(Key::Char('k')) => actions.push(Action::Window_Move(Movement::Up(1))),
+            Event::Key(Key::Char('l')) => actions.push(Action::Window_Move(Movement::Right(1))),
+            Event::Key(Key::Char('H')) => actions.push(Action::Window_ShiftEnd(Movement::Left(1))),
+            Event::Key(Key::Char('J')) => actions.push(Action::Window_ShiftEnd(Movement::Down(1))),
+            Event::Key(Key::Char('K')) => actions.push(Action::Window_ShiftEnd(Movement::Up(1))),
+            Event::Key(Key::Char('L')) => actions.push(Action::Window_ShiftEnd(Movement::Right(1))),
+            Event::Key(Key::Char('d')) => actions.push(Action::Window_Delete),
+            Event::Key(Key::Char('u')) => actions.push(Action::Buffer_Undo),
+            Event::Key(Key::Char('U')) => actions.push(Action::Buffer_Redo),
             _ => {}
         },
-        Mode::Goto { drag } => {
-            match event {
-                Event::Key(Key::Char('h')) => {
-                    try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                        selection.move_to(&buffer.content, Movement::LineStart, drag)
-                    })?;
-                }
-                Event::Key(Key::Char('j')) => {
-                    try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                        selection.move_to(&buffer.content, Movement::FileEnd, drag)
-                    })?;
-                }
-                Event::Key(Key::Char('k')) => {
-                    try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                        selection.move_to(&buffer.content, Movement::FileStart, drag)
-                    })?;
-                }
-                Event::Key(Key::Char('l')) => {
-                    try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                        selection.move_to(&buffer.content, Movement::LineEnd, drag)
-                    })?;
-                }
-                _ => {}
+        Mode::Goto { selecting } => {
+            let wrapper = if selecting {
+                Action::Window_ShiftEnd
+            } else {
+                Action::Window_Move
             };
-            {
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Normal;
+            let movement = match event {
+                Event::Key(Key::Char('h')) => Some(Movement::LineStart),
+                Event::Key(Key::Char('j')) => Some(Movement::FileEnd),
+                Event::Key(Key::Char('k')) => Some(Movement::FileStart),
+                Event::Key(Key::Char('l')) => Some(Movement::LineEnd),
+                _ => None,
             };
+            if let Some(movement) = movement {
+                actions.push(wrapper(movement));
+            }
+            actions.push(Action::Window_SwitchToMode(Mode::Normal))
         }
         mode @ Mode::Insert | mode @ Mode::Append => match event {
-            Event::Key(Key::Esc) => {
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Normal;
-            }
+            Event::Key(Key::Esc) => actions.push(Action::Window_SwitchToMode(Mode::Normal)),
             Event::Key(Key::Char(c)) => match mode {
                 Mode::Insert => {
-                    try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                        selection.start.insert_char(buffer, c);
-                        selection
-                            .start
-                            .move_to(&buffer.content, Movement::Right(1))?;
-                        selection.end.move_to(&buffer.content, Movement::Right(1))
-                    })?;
+                    actions.push(Action::Window_InsertAtSelectionStart(c));
+                    actions.push(Action::Window_ShiftStart(Movement::Right(1)));
+                    actions.push(Action::Window_ShiftEnd(Movement::Right(1)));
                 }
                 Mode::Append => {
-                    try_for_each_selection_in_focused_window::<_, MovementError>(
-                        state,
-                        |buffer, selection| {
-                            selection
-                                .start
-                                .move_to(&buffer.content, Movement::Right(1))?;
-                            selection.end.move_to(&buffer.content, Movement::Right(1))?;
-                            selection.end.insert_char(buffer, c);
-                            Ok(())
-                        },
-                    )?;
+                    actions.push(Action::Window_ShiftEnd(Movement::Right(1)));
+                    actions.push(Action::Window_InsertAtSelectionEnd(c));
                 }
                 _ => unreachable!(),
             },
             Event::Key(Key::Backspace) => {
-                try_for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.move_to(&buffer.content, Movement::Left(1), false)
-                })?;
-                for_each_selection_in_focused_window(state, |buffer, selection| {
-                    selection.remove_from(buffer);
-                });
+                actions.push(Action::Window_Move(Movement::Left(1)));
+                actions.push(Action::Window_Delete);
             }
             _ => {}
         },
         Mode::Command => match event {
             Event::Key(Key::Esc) => {
-                state.windows[state.open_tabs[state.focused_tab]]
-                    .command
-                    .clear();
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Normal;
+                actions.push(Action::Command_Clear);
+                actions.push(Action::Window_SwitchToMode(Mode::Normal));
             }
-            Event::Key(Key::Char('\t')) => {}
-            Event::Key(Key::Char('\n')) => {
-                let command = take(&mut state.windows[state.open_tabs[state.focused_tab]].command);
-                state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Normal;
-                let command = shlex(&command)
-                    .ok_or_else(|| format_err!("failed to parse command '{}'", command))?;
-                trace!("command: {:?}", command);
-                let command = command.iter().map(|x| &**x).collect::<Vec<&str>>();
-                run_command(state, &command)?;
-            }
-            Event::Key(Key::Char(c)) => {
-                state.windows[state.open_tabs[state.focused_tab]]
-                    .command
-                    .push(c);
-            }
-            Event::Key(Key::Backspace) => {
-                if state.windows[state.open_tabs[state.focused_tab]]
-                    .command
-                    .pop()
-                    .is_none()
-                {
-                    let mode: Mode = Mode::Normal;
-                    state.windows[state.open_tabs[state.focused_tab]].mode = mode;
-                }
-            }
+            Event::Key(Key::Char('\t')) => actions.push(Action::Command_Tab),
+            Event::Key(Key::Char('\n')) => actions.push(Action::Command_Return),
+            Event::Key(Key::Char(c)) => actions.push(Action::Command_Character(c)),
+            Event::Key(Key::Backspace) => actions.push(Action::Command_Backspace),
             _ => {}
         },
+    }
+
+    if let Err(e) = actions
+        .into_iter()
+        .try_for_each(|action| do_action(state, action))
+    {
+        state.pending_message = Some((Importance::Error, e.to_string()));
     }
     Ok(())
 }
@@ -669,17 +725,6 @@ where
     .unwrap()
 }
 
-fn with_primary_selection_in_focused_window<F, R>(state: &mut State, f: F) -> R
-where
-    F: FnOnce(&mut Buffer, &mut Selection) -> R,
-{
-    let window_id = state.open_tabs[state.focused_tab];
-    let window = &mut state.windows[window_id];
-    let buffer = &mut state.buffers[window.buffer];
-    let selection = &mut window.selections[window.primary_selection];
-    f(buffer, selection)
-}
-
 fn try_for_each_selection_in_focused_window<F, E>(state: &mut State, f: F) -> Result<(), E>
 where
     F: FnMut(&mut Buffer, &mut Selection) -> Result<(), E>,
@@ -717,6 +762,10 @@ pub fn undo(state: &mut State, window_id: WindowId) {
     }
 }
 
+pub fn redo(_state: &mut State, _window_id: WindowId) {
+    todo!()
+}
+
 impl Drop for State {
     fn drop(&mut self) {
         _ = write!(
@@ -727,31 +776,6 @@ impl Drop for State {
             screen::ToMainScreen
         );
     }
-}
-
-pub struct Window {
-    buffer: BufferId,
-    mode: Mode,
-    selections: TypedHandleMap<Selection>,
-    primary_selection: SelectionId,
-    command: String,
-    top: Line,
-}
-
-type SelectionId = TypedHandle<Selection>;
-
-pub struct Buffer {
-    pub path: Option<PathBuf>,
-    pub name: String,
-    pub content: Rope,
-    pub history: History,
-}
-
-pub struct NothingLeftToUndo;
-
-#[derive(Default)]
-pub struct History {
-    edits: VecDeque<Edit>,
 }
 
 impl History {
@@ -793,41 +817,6 @@ impl History {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum Edit {
-    Insert { pos: Position, text: String },
-    Delete { pos: Position, text: String },
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum Mode {
-    Normal,
-    Insert,
-    Append,
-    Goto { drag: bool },
-    Command,
-}
-
-#[derive(Debug, Copy, Clone)]
-pub enum Importance {
-    Error,
-}
-
-pub struct Context<'a> {
-    editor: &'a mut State,
-    window: WindowId,
-}
-
-pub struct CommandDesc {
-    name: &'static str,
-    aliases: &'static [&'static str],
-    #[allow(dead_code)]
-    description: &'static str,
-    #[allow(dead_code)]
-    required_arguments: usize,
-    run: fn(cx: Context, args: &[&str]) -> Result<()>,
-}
-
 const COMMANDS: &[CommandDesc] = &[
     CommandDesc {
         name: "quit",
@@ -857,15 +846,8 @@ const COMMANDS: &[CommandDesc] = &[
             let buffer_id = cx.editor.buffers.insert(buffer);
             let mut selections = TypedHandleMap::new();
             let selection_id = selections.insert(Selection {
-                // TODO move this out
-                start: Position {
-                    line: Line::from_one_based(1),
-                    column: Column::from_one_based(1),
-                },
-                end: Position {
-                    line: Line::from_one_based(1),
-                    column: Column::from_one_based(1),
-                },
+                start: Position::file_start(),
+                end: Position::file_start(),
             });
             let window = Window {
                 buffer: buffer_id,

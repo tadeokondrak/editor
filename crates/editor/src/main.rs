@@ -1,7 +1,7 @@
 mod location;
 mod terminal;
 
-use anyhow::{format_err, Context as _};
+use anyhow::{format_err, Context as _, Result};
 use crossbeam_channel::{select, unbounded, Receiver, Sender};
 use handy::typed::{TypedHandle, TypedHandleMap};
 use log::{error, info, trace};
@@ -33,8 +33,6 @@ use {
     location::{Column, Line, Movement, MovementError, Position, Selection},
     terminal::{Point, Rect},
 };
-
-type Result<T, E = anyhow::Error> = anyhow::Result<T, E>;
 
 type WindowId = TypedHandle<Window>;
 type BufferId = TypedHandle<Buffer>;

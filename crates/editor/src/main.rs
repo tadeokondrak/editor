@@ -212,9 +212,13 @@ fn run_command(state: &mut State, args: &[&str]) -> Result<()> {
 
 #[allow(dead_code)]
 fn move_to(state: &mut State, movement: Movement, selecting: bool) -> Result<(), MovementError> {
-    try_for_each_selection_in_focused_window(state, |buffer, selection| {
-        selection.move_to(&buffer.content, movement, selecting)
-    })
+    let window_id = state.open_tabs[state.focused_tab];
+    let window = &mut state.windows[window_id];
+    let buffer = &mut state.buffers[window.buffer];
+    for selection in window.selections.iter_mut() {
+        selection.move_to(&buffer.content, movement, selecting)?
+    }
+    Ok(())
 }
 
 #[allow(non_camel_case_types)]
@@ -400,9 +404,11 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
             Event::Key(Key::Right) => actions.push(Action::Window_Move(Movement::Right(1))),
             Event::Key(Key::Ctrl('u')) => actions.push(Action::Window_ScrollHalfPageUp),
             Event::Key(Key::Ctrl('d')) => actions.push(Action::Window_ScrollHalfPageDown),
-            Event::Key(Key::Ctrl('b') | Key::PageUp) => actions.push(Action::Window_ScrollPageUp),
+            Event::Key(Key::Ctrl('b') | Key::PageUp) => {
+                actions.push(Action::Window_ScrollPageUp);
+            }
             Event::Key(Key::Ctrl('f') | Key::PageDown) => {
-                actions.push(Action::Window_ScrollPageDown)
+                actions.push(Action::Window_ScrollPageDown);
             }
             Event::Key(Key::Ctrl('p')) => actions.push(Action::Editor_PreviousTab),
             Event::Key(Key::Ctrl('n')) => actions.push(Action::Editor_NextTab),
@@ -706,56 +712,18 @@ pub fn quit(state: &mut State) {
     state.exit_channels.0.send(()).unwrap();
 }
 
-fn for_each_selection_in_focused_window<F>(state: &mut State, mut f: F)
-where
-    F: FnMut(&mut Buffer, &mut Selection),
-{
-    let window_id = state.open_tabs[state.focused_tab];
-    for_each_selection_in_window(state, window_id, |buf, sel| f(buf, sel));
-}
-
-fn for_each_selection_in_window<F>(state: &mut State, window_id: WindowId, mut f: F)
-where
-    F: FnMut(&mut Buffer, &mut Selection),
-{
-    try_for_each_selection_in_window::<_, Infallible>(state, window_id, |buf, sel| {
-        f(buf, sel);
-        Ok(())
-    })
-    .unwrap()
-}
-
-fn try_for_each_selection_in_focused_window<F, E>(state: &mut State, f: F) -> Result<(), E>
-where
-    F: FnMut(&mut Buffer, &mut Selection) -> Result<(), E>,
-{
-    let window_id = state.open_tabs[state.focused_tab];
-    try_for_each_selection_in_window(state, window_id, f)
-}
-
-fn try_for_each_selection_in_window<F, E>(
-    state: &mut State,
-    window_id: WindowId,
-    mut f: F,
-) -> Result<(), E>
-where
-    F: FnMut(&mut Buffer, &mut Selection) -> Result<(), E>,
-{
-    let window = &mut state.windows[window_id];
-    let buffer = &mut state.buffers[window.buffer];
-    for selection in window.selections.iter_mut() {
-        f(buffer, selection)?;
-    }
-    Ok(())
-}
-
 pub fn undo(state: &mut State, window_id: WindowId) {
     let window = &mut state.windows[window_id];
     let buffer = &mut state.buffers[window.buffer];
     match buffer.history.undo(&mut buffer.content) {
-        Ok(()) => for_each_selection_in_focused_window(state, |buffer, selection| {
-            selection.validate(&buffer.content);
-        }),
+        Ok(()) => {
+            let window_id = state.open_tabs[state.focused_tab];
+            let window = &mut state.windows[window_id];
+            let buffer = &mut state.buffers[window.buffer];
+            for selection in window.selections.iter_mut() {
+                selection.validate(&buffer.content);
+            }
+        }
         Err(NothingLeftToUndo) => {
             show_message(state, Importance::Error, "nothing left to undo".into());
         }

@@ -2,12 +2,11 @@ pub mod location;
 
 use anyhow::{format_err, Context as _, Result};
 use handy::typed::{TypedHandle, TypedHandleMap};
-use location::{Line, Movement, MovementError, Position, Selection};
+use location::{Line, Movement, Position, Selection};
 use log::trace;
 use ropey::Rope;
 use shlex::split as shlex;
 use std::{
-    collections::VecDeque,
     fmt::Debug,
     fs::{File, OpenOptions},
     mem::take,
@@ -41,21 +40,9 @@ pub struct BufferData {
     pub path: Option<PathBuf>,
     pub name: String,
     pub content: Rope,
-    pub history: History,
 }
 
 pub struct NothingLeftToUndo;
-
-#[derive(Default)]
-pub struct History {
-    edits: VecDeque<Edit>,
-}
-
-#[derive(Debug, Clone)]
-pub enum Edit {
-    Insert { pos: Position, text: String },
-    Delete { pos: Position, text: String },
-}
 
 #[derive(Debug, Copy, Clone)]
 pub enum Mode {
@@ -140,7 +127,6 @@ impl EditorData {
         let scratch_buffer = buffers.insert(BufferData {
             content: Rope::from("\n"),
             name: String::from("scratch"),
-            history: History::default(),
             path: None,
         });
         let mut selections = TypedHandleMap::new();
@@ -189,21 +175,6 @@ pub fn run_command(state: &mut EditorData, args: &[&str]) -> Result<()> {
     )
 }
 
-#[allow(dead_code)]
-fn move_to(
-    state: &mut EditorData,
-    movement: Movement,
-    selecting: bool,
-) -> Result<(), MovementError> {
-    let window_id = state.open_tabs[state.focused_tab];
-    let window = &mut state.windows[window_id];
-    let buffer = &mut state.buffers[window.buffer];
-    for selection in window.selections.iter_mut() {
-        selection.move_to(&buffer.content, movement, selecting)?
-    }
-    Ok(())
-}
-
 pub fn perform_editor_action(state: &mut EditorData, action: EditorAction) -> Result<()> {
     match action {
         EditorAction::Quit => {
@@ -219,15 +190,10 @@ pub fn perform_editor_action(state: &mut EditorData, action: EditorAction) -> Re
     Ok(())
 }
 
-pub fn perform_buffer_action(state: &mut EditorData, action: BufferAction) -> Result<()> {
-    let window_id = state.open_tabs[state.focused_tab];
+pub fn perform_buffer_action(_state: &mut EditorData, action: BufferAction) -> Result<()> {
     match action {
-        BufferAction::Undo => {
-            undo(state, window_id);
-        }
-        BufferAction::Redo => {
-            redo(state, window_id);
-        }
+        BufferAction::Undo => {}
+        BufferAction::Redo => {}
     }
     Ok(())
 }
@@ -340,67 +306,6 @@ pub fn show_message(state: &mut EditorData, importance: Importance, message: Str
     state.pending_message = Some((importance, message));
 }
 
-pub fn undo(state: &mut EditorData, window_id: WindowId) {
-    let window = &mut state.windows[window_id];
-    let buffer = &mut state.buffers[window.buffer];
-    match buffer.history.undo(&mut buffer.content) {
-        Ok(()) => {
-            let window_id = state.open_tabs[state.focused_tab];
-            let window = &mut state.windows[window_id];
-            let buffer = &mut state.buffers[window.buffer];
-            for selection in window.selections.iter_mut() {
-                selection.validate(&buffer.content);
-            }
-        }
-        Err(NothingLeftToUndo) => {
-            show_message(state, Importance::Error, "nothing left to undo".into());
-        }
-    }
-}
-
-pub fn redo(_state: &mut EditorData, _window_id: WindowId) {
-    todo!()
-}
-
-impl History {
-    pub fn insert_char(&mut self, rope: &mut Rope, pos: Position, c: char) {
-        rope.insert_char(pos.char_of(rope), c);
-        self.push_back(Edit::Insert {
-            pos,
-            text: c.to_string(),
-        });
-    }
-
-    pub fn remove_selection(&mut self, rope: &mut Rope, sel: Selection) {
-        let text = sel.slice_of(rope).to_string();
-        rope.remove(sel.range_of(rope));
-        self.push_back(Edit::Delete {
-            pos: sel.start,
-            text,
-        });
-    }
-
-    pub fn undo(&mut self, rope: &mut Rope) -> Result<(), NothingLeftToUndo> {
-        let edit = self.edits.pop_back().ok_or(NothingLeftToUndo)?;
-        trace!("undoing edit: {:?}", edit);
-        match edit {
-            Edit::Insert { pos, text } => {
-                rope.remove(pos.char_of(rope)..pos.char_of(rope) + text.len());
-                Ok(())
-            }
-            Edit::Delete { pos, text } => {
-                rope.insert(pos.char_of(rope), &text);
-                Ok(())
-            }
-        }
-    }
-
-    pub fn push_back(&mut self, edit: Edit) {
-        trace!("pushing edit: {:?}", edit);
-        self.edits.push_back(edit);
-    }
-}
-
 const COMMANDS: &[CommandDesc] = &[
     CommandDesc {
         name: "quit",
@@ -422,7 +327,6 @@ const COMMANDS: &[CommandDesc] = &[
                 path: Some(path),
                 name,
                 content: Rope::from_reader(reader)?,
-                history: History::default(),
             };
             let buffer_id = cx.editor.buffers.insert(buffer);
             let mut selections = TypedHandleMap::new();

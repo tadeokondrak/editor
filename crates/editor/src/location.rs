@@ -149,7 +149,7 @@ impl Position {
     }
 
     pub fn insert_char(self, buffer: &mut BufferData, c: char) {
-        buffer.history.insert_char(&mut buffer.content, self, c);
+        buffer.content.insert_char(self.char_of(&buffer.content), c);
     }
 
     pub fn validate(&mut self, rope: &Rope) {
@@ -356,7 +356,8 @@ impl Selection {
     pub fn remove_from(&mut self, buffer: &mut BufferData) {
         self.validate(&buffer.content);
         self.order();
-        buffer.history.remove_selection(&mut buffer.content, *self);
+        let range = self.range_of(&buffer.content);
+        buffer.content.remove(range);
         self.end = self.start;
         self.validate_fix(buffer);
         // TODO: the file must be terminated by a final newline

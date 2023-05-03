@@ -58,17 +58,11 @@ name = "editor"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "crossbeam-channel",
- "env_logger",
  "handy",
  "log",
  "ropey",
  "shlex",
- "signal-hook",
- "termion",
  "thiserror",
- "toml",
- "xdg",
 ]
 
 [[package]]
@@ -274,7 +268,18 @@ name = "tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
  "editor",
+ "env_logger",
+ "handy",
+ "log",
+ "ropey",
+ "shlex",
+ "signal-hook",
+ "termion",
+ "thiserror",
+ "toml",
+ "xdg",
 ]
 
 [[package]]

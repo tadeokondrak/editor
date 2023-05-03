@@ -24,6 +24,15 @@ use termion::{
     screen, style, terminal_size,
 };
 
+pub struct State {
+    pub editor: Editor,
+    pub signals: Receiver<c_int>,
+    pub inputs: Receiver<io::Result<Event>>,
+    pub tty: RawTerminal<File>,
+    pub tabline_needs_redraw: bool,
+    pub statusline_needs_redraw: bool,
+}
+
 impl Drop for State {
     fn drop(&mut self) {
         _ = write!(
@@ -34,15 +43,6 @@ impl Drop for State {
             screen::ToMainScreen
         );
     }
-}
-
-pub struct State {
-    pub editor: Editor,
-    pub signals: Receiver<c_int>,
-    pub inputs: Receiver<io::Result<Event>>,
-    pub tty: RawTerminal<File>,
-    pub tabline_needs_redraw: bool,
-    pub statusline_needs_redraw: bool,
 }
 
 fn main() -> Result<()> {
@@ -71,12 +71,11 @@ fn main() -> Result<()> {
             statusline_needs_redraw: true,
         }
     };
-    fn handle_next_event(state: &mut State) -> Result<bool> {
+    fn handle_next_event(state: &mut State) -> Result<()> {
         select! {
-            recv(state.inputs) -> input => handle_event(state, input??)?,
-            recv(state.signals) -> signal => handle_signal(state, signal?)?,
+            recv(state.inputs) -> input => handle_event(state, input??),
+            recv(state.signals) -> signal => handle_signal(state, signal?),
         }
-        Ok(true)
     }
 
     write!(
@@ -88,13 +87,9 @@ fn main() -> Result<()> {
     )?;
     while !state.editor.want_quit {
         draw(&mut state)?;
-        match handle_next_event(&mut state) {
-            Ok(true) => continue,
-            Ok(false) => return Ok(()),
-            Err(err) => {
-                error!("{}", err);
-                show_message(&mut state.editor, Importance::Error, err.to_string());
-            }
+        if let Err(e) = handle_next_event(&mut state) {
+            error!("{e}");
+            show_message(&mut state.editor, Importance::Error, e.to_string());
         }
     }
     Ok(())

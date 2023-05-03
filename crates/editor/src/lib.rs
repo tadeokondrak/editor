@@ -110,7 +110,7 @@ pub struct CommandDesc {
     run: fn(cx: Context, args: &[&str]) -> Result<()>,
 }
 
-fn main() -> Result<()> {
+pub fn main() -> Result<()> {
     env_logger::init();
     let mut state = {
         let (signals, signal) = unbounded();
@@ -401,6 +401,8 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
             Event::Key(Key::Right) => actions.push(Action::Window_Move(Movement::Right(1))),
             Event::Key(Key::Ctrl('u')) => actions.push(Action::Window_ScrollHalfPageUp),
             Event::Key(Key::Ctrl('d')) => actions.push(Action::Window_ScrollHalfPageDown),
+            Event::Key(Key::Home) => actions.push(Action::Window_Move(Movement::LineStart)),
+            Event::Key(Key::End) => actions.push(Action::Window_Move(Movement::LineEnd)),
             Event::Key(Key::Ctrl('b') | Key::PageUp) => {
                 actions.push(Action::Window_ScrollPageUp);
             }
@@ -451,6 +453,7 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
             Event::Key(Key::Char('X')) => {
                 //self.move_selections(self.focused, Movement::Line, true)?;
             }
+            // Event::Key(Key::Char('C'))
             Event::Key(Key::Char('g')) => {
                 actions.push(Action::Window_SwitchToMode(Mode::Goto { selecting: false }));
             }

@@ -156,143 +156,161 @@ fn move_to(state: &mut Editor, movement: Movement, selecting: bool) -> Result<()
 #[allow(non_camel_case_types)]
 #[derive(Debug, Copy, Clone)]
 pub enum Action {
-    // Window actions
-    Editor_PreviousTab,
-    Editor_NextTab,
-    // Buffer actions
-    Buffer_Undo,
-    Buffer_Redo,
-    // Window actions
-    Window_InsertAtSelectionStart(char),
-    Window_InsertAtSelectionEnd(char),
-    Window_Delete,
-    Window_Move(Movement),
-    Window_ShiftStart(Movement),
-    Window_ShiftEnd(Movement),
-    Window_ScrollPageUp,
-    Window_ScrollPageDown,
-    Window_ScrollHalfPageUp,
-    Window_ScrollHalfPageDown,
-    Window_OrderSelections,
-    Window_SwitchToMode(Mode),
-    // Command actions
-    Command_Character(char),
-    Command_Clear,
-    Command_Tab,
-    Command_Return,
-    Command_Backspace,
+    Editor(EditorAction),
+    Buffer(BufferAction),
+    Window(WindowAction),
+    Command(CommandAction),
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum EditorAction {
+    PreviousTab,
+    NextTab,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum BufferAction {
+    Undo,
+    Redo,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum WindowAction {
+    InsertAtSelectionStart(char),
+    InsertAtSelectionEnd(char),
+    Delete,
+    Move(Movement),
+    ShiftStart(Movement),
+    ShiftEnd(Movement),
+    ScrollPageUp,
+    ScrollPageDown,
+    ScrollHalfPageUp,
+    ScrollHalfPageDown,
+    OrderSelections,
+    SwitchToMode(Mode),
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum CommandAction {
+    Character(char),
+    Clear,
+    Tab,
+    Return,
+    Backspace,
 }
 
 pub fn do_action(state: &mut Editor, action: Action) -> Result<()> {
     match action {
-        Action::Editor_PreviousTab => {
+        Action::Editor(EditorAction::PreviousTab) => {
             state.focused_tab = (state.focused_tab - 1) % state.open_tabs.len();
             Ok(())
         }
-        Action::Editor_NextTab => {
+        Action::Editor(EditorAction::NextTab) => {
             state.focused_tab = (state.focused_tab + 1) % state.open_tabs.len();
             Ok(())
         }
-        Action::Buffer_Undo => {
+        Action::Buffer(BufferAction::Undo) => {
             undo(state, state.open_tabs[state.focused_tab]);
             Ok(())
         }
-        Action::Buffer_Redo => {
+        Action::Buffer(BufferAction::Redo) => {
             redo(state, state.open_tabs[state.focused_tab]);
             Ok(())
         }
-        action @ (Action::Window_InsertAtSelectionStart(_)
-        | Action::Window_InsertAtSelectionEnd(_)
-        | Action::Window_Delete
-        | Action::Window_Move(_)
-        | Action::Window_ShiftStart(_)
-        | Action::Window_ShiftEnd(_)
-        | Action::Window_ScrollPageUp
-        | Action::Window_ScrollPageDown
-        | Action::Window_ScrollHalfPageUp
-        | Action::Window_ScrollHalfPageDown
-        | Action::Window_OrderSelections) => {
+        action @ (Action::Window(WindowAction::InsertAtSelectionStart(_))
+        | Action::Window(WindowAction::InsertAtSelectionEnd(_))
+        | Action::Window(WindowAction::Delete)
+        | Action::Window(WindowAction::Move(_))
+        | Action::Window(WindowAction::ShiftStart(_))
+        | Action::Window(WindowAction::ShiftEnd(_))
+        | Action::Window(WindowAction::ScrollPageUp)
+        | Action::Window(WindowAction::ScrollPageDown)
+        | Action::Window(WindowAction::ScrollHalfPageUp)
+        | Action::Window(WindowAction::ScrollHalfPageDown)
+        | Action::Window(WindowAction::OrderSelections)) => {
             let window_id = state.open_tabs[state.focused_tab];
             let window = &mut state.windows[window_id];
             let buffer = &mut state.buffers[window.buffer];
             for selection in window.selections.iter_mut() {
                 match action {
-                    Action::Window_InsertAtSelectionStart(c) => {
+                    Action::Window(WindowAction::InsertAtSelectionStart(c)) => {
                         selection.start.insert_char(buffer, c);
                     }
-                    Action::Window_InsertAtSelectionEnd(c) => {
+                    Action::Window(WindowAction::InsertAtSelectionEnd(c)) => {
                         selection.end.insert_char(buffer, c);
                     }
-                    Action::Window_Delete => {
+                    Action::Window(WindowAction::Delete) => {
                         selection.remove_from(buffer);
                     }
-                    Action::Window_Move(movement) => {
+                    Action::Window(WindowAction::Move(movement)) => {
                         selection.end.move_to(&buffer.content, movement)?;
                         selection.start = selection.end;
                     }
-                    Action::Window_ShiftStart(movement) => {
+                    Action::Window(WindowAction::ShiftStart(movement)) => {
                         selection.start.move_to(&buffer.content, movement)?;
                     }
-                    Action::Window_ShiftEnd(movement) => {
+                    Action::Window(WindowAction::ShiftEnd(movement)) => {
                         selection.end.move_to(&buffer.content, movement)?;
                     }
-                    Action::Window_ScrollPageUp
-                    | Action::Window_ScrollPageDown
-                    | Action::Window_ScrollHalfPageUp
-                    | Action::Window_ScrollHalfPageDown => {
+                    Action::Window(WindowAction::ScrollPageUp)
+                    | Action::Window(WindowAction::ScrollPageDown)
+                    | Action::Window(WindowAction::ScrollHalfPageUp)
+                    | Action::Window(WindowAction::ScrollHalfPageDown) => {
                         if let Some(height) = state.last_screen_height {
                             let height = usize::from(height);
                             let movement = match action {
-                                Action::Window_ScrollPageUp => Movement::Up(height),
-                                Action::Window_ScrollPageDown => Movement::Down(height),
-                                Action::Window_ScrollHalfPageUp => Movement::Up(height / 2),
-                                Action::Window_ScrollHalfPageDown => Movement::Down(height / 2),
+                                Action::Window(WindowAction::ScrollPageUp) => Movement::Up(height),
+                                Action::Window(WindowAction::ScrollPageDown) => {
+                                    Movement::Down(height)
+                                }
+                                Action::Window(WindowAction::ScrollHalfPageUp) => {
+                                    Movement::Up(height / 2)
+                                }
+                                Action::Window(WindowAction::ScrollHalfPageDown) => {
+                                    Movement::Down(height / 2)
+                                }
                                 _ => unreachable!(),
                             };
                             selection.end.move_to(&buffer.content, movement)?;
                             selection.start = selection.end;
                         }
                     }
-                    Action::Window_OrderSelections => {
+                    Action::Window(WindowAction::OrderSelections) => {
                         selection.order();
                     }
-                    Action::Window_SwitchToMode(_)
-                    | Action::Editor_PreviousTab
-                    | Action::Editor_NextTab
-                    | Action::Buffer_Undo
-                    | Action::Buffer_Redo
-                    | Action::Command_Character(_)
-                    | Action::Command_Clear
-                    | Action::Command_Tab
-                    | Action::Command_Return
-                    | Action::Command_Backspace => {
+                    Action::Window(WindowAction::SwitchToMode(_))
+                    | Action::Editor(EditorAction::PreviousTab)
+                    | Action::Editor(EditorAction::NextTab)
+                    | Action::Buffer(BufferAction::Undo)
+                    | Action::Buffer(BufferAction::Redo)
+                    | Action::Command(_) => {
                         unreachable!()
                     }
                 }
             }
             Ok(())
         }
-        Action::Window_SwitchToMode(mode) => {
+        Action::Window(WindowAction::SwitchToMode(mode)) => {
             state.windows[state.open_tabs[state.focused_tab]].mode = mode;
             Ok(())
         }
-        Action::Command_Character(c) => {
+        Action::Command(CommandAction::Character(c)) => {
             state.windows[state.open_tabs[state.focused_tab]]
                 .command
                 .push(c);
             Ok(())
         }
-        Action::Command_Clear => {
+        Action::Command(CommandAction::Clear) => {
             state.windows[state.open_tabs[state.focused_tab]]
                 .command
                 .clear();
             Ok(())
         }
-        Action::Command_Tab => {
+        Action::Command(CommandAction::Tab) => {
             // TODO
             Ok(())
         }
-        Action::Command_Return => {
+        Action::Command(CommandAction::Return) => {
             let command = take(&mut state.windows[state.open_tabs[state.focused_tab]].command);
             state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Normal;
             let command = shlex(&command)
@@ -302,7 +320,7 @@ pub fn do_action(state: &mut Editor, action: Action) -> Result<()> {
             run_command(state, &command)?;
             Ok(())
         }
-        Action::Command_Backspace => {
+        Action::Command(CommandAction::Backspace) => {
             if state.windows[state.open_tabs[state.focused_tab]]
                 .command
                 .pop()

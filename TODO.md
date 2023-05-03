@@ -1,0 +1,1 @@
+- Remove the anyhow crate as a dependency from the editor crate

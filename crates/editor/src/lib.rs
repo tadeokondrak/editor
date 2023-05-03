@@ -2,7 +2,7 @@ pub mod location;
 
 use anyhow::{format_err, Context as _, Result};
 use handy::typed::{TypedHandle, TypedHandleMap};
-use location::{Line, Movement, Position, Selection};
+use location::{LineIndex, Movement, Position, Selection};
 use log::trace;
 use ropey::Rope;
 use shlex::split as shlex;
@@ -33,7 +33,7 @@ pub struct WindowData {
     pub selections: TypedHandleMap<Selection>,
     pub primary_selection: SelectionId,
     pub command: String,
-    pub top: Line,
+    pub top: LineIndex,
 }
 
 pub struct BufferData {
@@ -140,7 +140,7 @@ impl EditorData {
             selections,
             primary_selection,
             command: String::new(),
-            top: Line::from_one_based(1),
+            top: LineIndex::from_one_based(1),
         });
         EditorData {
             windows,
@@ -198,10 +198,12 @@ pub fn perform_buffer_action(_state: &mut EditorData, action: BufferAction) -> R
     Ok(())
 }
 
-pub fn perform_window_action(state: &mut EditorData, action: WindowAction) -> Result<()> {
-    let window_id = state.open_tabs[state.focused_tab];
-    let window = &mut state.windows[window_id];
-    let buffer = &mut state.buffers[window.buffer];
+pub fn perform_window_action(
+    window: &mut WindowData,
+    buffer: &mut BufferData,
+    action: WindowAction,
+    last_screen_height: Option<u16>,
+) -> Result<()> {
     for selection in window.selections.iter_mut() {
         match action {
             WindowAction::InsertAtSelectionStart(c) => {
@@ -227,7 +229,7 @@ pub fn perform_window_action(state: &mut EditorData, action: WindowAction) -> Re
             | WindowAction::ScrollPageDown
             | WindowAction::ScrollHalfPageUp
             | WindowAction::ScrollHalfPageDown => {
-                if let Some(height) = state.last_screen_height {
+                if let Some(height) = last_screen_height {
                     let height = usize::from(height);
                     let movement = match action {
                         WindowAction::ScrollPageUp => Movement::Up(height),
@@ -297,7 +299,12 @@ pub fn perform_action(state: &mut EditorData, action: Action) -> Result<()> {
     match action {
         Action::Editor(editor_action) => perform_editor_action(state, editor_action),
         Action::Buffer(buffer_action) => perform_buffer_action(state, buffer_action),
-        Action::Window(window_action) => perform_window_action(state, window_action),
+        Action::Window(window_action) => {
+            let window_id = state.open_tabs[state.focused_tab];
+            let window = &mut state.windows[window_id];
+            let buffer = &mut state.buffers[window.buffer];
+            perform_window_action(window, buffer, window_action, state.last_screen_height)
+        }
         Action::Command(command_action) => perform_command_action(state, command_action),
     }
 }
@@ -340,7 +347,7 @@ const COMMANDS: &[CommandDesc] = &[
                 mode: Mode::Normal,
                 selections,
                 primary_selection: selection_id,
-                top: Line::from_one_based(1),
+                top: LineIndex::from_one_based(1),
             };
             let focused_tab = cx.editor.open_tabs.len();
             cx.editor.open_tabs.push(cx.editor.windows.insert(window));

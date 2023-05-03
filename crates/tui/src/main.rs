@@ -2,7 +2,7 @@ mod terminal;
 
 use anyhow::Result;
 use crossbeam_channel::{select, unbounded, Receiver};
-use editor::location::{Column, Line, Movement, Position};
+use editor::location::{ColumnIndex, LineIndex, Movement, Position};
 use editor::{
     perform_action, show_message, Action, BufferAction, CommandAction, EditorAction, EditorData,
     Importance, Mode, WindowAction, WindowId,
@@ -441,8 +441,8 @@ fn draw_window(state: &mut State, window_id: WindowId, region: Rect) -> Result<(
                     col = 0;
                 }
                 let pos = Position {
-                    line: Line::from_zero_based(line),
-                    column: Column::from_zero_based(file_col),
+                    line: LineIndex::from_zero_based(line),
+                    column: ColumnIndex::from_zero_based(file_col),
                 };
                 if c == '\n' {
                     c = ' ';

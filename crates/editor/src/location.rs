@@ -74,11 +74,11 @@ macro_rules! newtype_impl {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct Line(NonZeroUsize);
+pub struct LineIndex(NonZeroUsize);
 
-newtype_impl!(Line);
+newtype_impl!(LineIndex);
 
-impl Line {
+impl LineIndex {
     #[allow(dead_code)]
     pub fn range_of(self, rope: &Rope) -> Range<usize> {
         self.char_of(rope)..self.char_of(rope) + self.slice_of(rope).len_chars()
@@ -111,11 +111,11 @@ impl Line {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct Column(NonZeroUsize);
+pub struct ColumnIndex(NonZeroUsize);
 
-newtype_impl!(Column);
+newtype_impl!(ColumnIndex);
 
-impl Column {
+impl ColumnIndex {
     pub fn is_first(self) -> bool {
         self.one_based() == 1
     }
@@ -123,15 +123,15 @@ impl Column {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Position {
-    pub line: Line,
-    pub column: Column,
+    pub line: LineIndex,
+    pub column: ColumnIndex,
 }
 
 impl Position {
     pub fn file_start() -> Self {
         Self {
-            line: Line::from_one_based(1),
-            column: Column::from_one_based(1),
+            line: LineIndex::from_one_based(1),
+            column: ColumnIndex::from_one_based(1),
         }
     }
 
@@ -160,8 +160,8 @@ impl Position {
                     self.move_to(rope, Movement::LineEnd).unwrap();
                 } else {
                     assert_eq!(rope.len_chars(), 0);
-                    self.line = Line::from_one_based(1);
-                    self.column = Column::from_one_based(1);
+                    self.line = LineIndex::from_one_based(1);
+                    self.column = ColumnIndex::from_one_based(1);
                     panic!("{}", MovementError::SelectionEmpty);
                 }
             } else {
@@ -178,8 +178,8 @@ impl Position {
                     self.move_to(&buffer.content, Movement::LineEnd).unwrap();
                 } else {
                     assert_eq!(buffer.content.len_chars(), 0);
-                    self.line = Line::from_one_based(1);
-                    self.column = Column::from_one_based(1);
+                    self.line = LineIndex::from_one_based(1);
+                    self.column = ColumnIndex::from_one_based(1);
                     self.insert_char(buffer, '\n');
                 }
             } else {
@@ -265,17 +265,17 @@ impl Position {
                 }
             }
             Movement::LineStart => {
-                self.column = Column::from_one_based(1);
+                self.column = ColumnIndex::from_one_based(1);
             }
             Movement::LineEnd => {
-                self.column = Column::from_one_based(self.line.slice_of(rope).len_chars());
+                self.column = ColumnIndex::from_one_based(self.line.slice_of(rope).len_chars());
             }
             Movement::FileStart => {
-                self.line = Line::from_one_based(1);
+                self.line = LineIndex::from_one_based(1);
                 self.move_to(rope, Movement::LineStart)?;
             }
             Movement::FileEnd => {
-                let last = Line::from_one_based(rope.len_lines());
+                let last = LineIndex::from_one_based(rope.len_lines());
                 if !last.is_empty(rope) {
                     self.line = last;
                 } else {

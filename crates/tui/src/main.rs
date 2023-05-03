@@ -4,7 +4,7 @@ use anyhow::Result;
 use crossbeam_channel::{select, unbounded, Receiver};
 use editor::location::{Column, Line, Movement, Position};
 use editor::{
-    do_action, show_message, Action, BufferAction, CommandAction, EditorAction, EditorData,
+    perform_action, show_message, Action, BufferAction, CommandAction, EditorAction, EditorData,
     Importance, Mode, WindowAction, WindowId,
 };
 use log::{error, info, trace};
@@ -292,7 +292,7 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
 
     if let Err(e) = actions
         .into_iter()
-        .try_for_each(|action| do_action(&mut state.editor, action))
+        .try_for_each(|action| perform_action(&mut state.editor, action))
     {
         state.editor.pending_message = Some((Importance::Error, e.to_string()));
     }

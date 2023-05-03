@@ -1,15 +1,10 @@
 mod terminal;
 
 use anyhow::Result;
-
-use crossbeam_channel::{select, unbounded, Receiver, Sender};
-use editor::location::{Column, Line, Movement, Position, Selection};
-use editor::{
-    do_action, show_message, Action, Buffer, History, Importance, Mode, StateRef, Window, WindowId,
-};
-use handy::typed::TypedHandleMap;
+use crossbeam_channel::{select, unbounded, Receiver};
+use editor::location::{Column, Line, Movement, Position};
+use editor::{do_action, show_message, Action, Editor, Importance, Mode, WindowId};
 use log::{error, info, trace};
-use ropey::Rope;
 use signal_hook::{iterator::Signals, SIGWINCH};
 use std::{
     fs::File,
@@ -42,33 +37,12 @@ impl Drop for State {
 }
 
 pub struct State {
+    pub editor: Editor,
     pub signals: Receiver<c_int>,
     pub inputs: Receiver<io::Result<Event>>,
-    pub exit_channels: (Sender<()>, Receiver<()>),
-    pub windows: TypedHandleMap<Window>,
-    pub buffers: TypedHandleMap<Buffer>,
-    pub open_tabs: Vec<WindowId>,
-    pub focused_tab: usize,
     pub tty: RawTerminal<File>,
     pub tabline_needs_redraw: bool,
     pub statusline_needs_redraw: bool,
-    pub last_screen_height: Option<u16>,
-    pub pending_message: Option<(Importance, String)>,
-    pub want_quit: bool,
-}
-
-impl State {
-    fn ref_(&mut self) -> StateRef {
-        StateRef {
-            windows: &mut self.windows,
-            buffers: &mut self.buffers,
-            open_tabs: &mut self.open_tabs,
-            focused_tab: &mut self.focused_tab,
-            last_screen_height: &mut self.last_screen_height,
-            pending_message: &mut self.pending_message,
-            want_quit: &mut self.want_quit,
-        }
-    }
 }
 
 fn main() -> Result<()> {
@@ -88,48 +62,19 @@ fn main() -> Result<()> {
                 inputs.send(event).unwrap();
             }
         });
-        let mut windows = TypedHandleMap::new();
-        let mut buffers = TypedHandleMap::new();
-        let scratch_buffer = buffers.insert(Buffer {
-            content: Rope::from("\n"),
-            name: String::from("scratch"),
-            history: History::default(),
-            path: None,
-        });
-        let mut selections = TypedHandleMap::new();
-        let primary_selection = selections.insert(Selection {
-            start: Position::file_start(),
-            end: Position::file_start(),
-        });
-        let focused_window = windows.insert(Window {
-            buffer: scratch_buffer,
-            mode: Mode::Normal,
-            selections,
-            primary_selection,
-            command: String::new(),
-            top: Line::from_one_based(1),
-        });
         State {
+            editor: Editor::new(),
             signals: signal,
             inputs: input,
-            exit_channels: unbounded(),
-            windows,
-            buffers,
-            open_tabs: vec![focused_window],
-            focused_tab: 0,
             tty: get_tty()?.into_raw_mode()?,
             tabline_needs_redraw: true,
             statusline_needs_redraw: true,
-            last_screen_height: None,
-            pending_message: None,
-            want_quit: false,
         }
     };
     fn handle_next_event(state: &mut State) -> Result<bool> {
         select! {
             recv(state.inputs) -> input => handle_event(state, input??)?,
             recv(state.signals) -> signal => handle_signal(state, signal?)?,
-            recv(state.exit_channels.1) -> exit => { exit?; return Ok(false); },
         }
         Ok(true)
     }
@@ -141,14 +86,14 @@ fn main() -> Result<()> {
         cursor::Hide,
         cursor::SteadyBar
     )?;
-    while !state.want_quit {
+    while !state.editor.want_quit {
         draw(&mut state)?;
         match handle_next_event(&mut state) {
             Ok(true) => continue,
             Ok(false) => return Ok(()),
             Err(err) => {
                 error!("{}", err);
-                show_message(&mut state.ref_(), Importance::Error, err.to_string());
+                show_message(&mut state.editor, Importance::Error, err.to_string());
             }
         }
     }
@@ -166,7 +111,7 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
     let mut actions = Vec::new();
 
     if let Mode::Normal | Mode::Insert | Mode::Append =
-        state.windows[state.open_tabs[state.focused_tab]].mode
+        state.editor.windows[state.editor.open_tabs[state.editor.focused_tab]].mode
     {
         match &event {
             Event::Key(Key::Left) => actions.push(Action::Window_Move(Movement::Left(1))),
@@ -196,7 +141,7 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
         }
     }
 
-    match state.windows[state.open_tabs[state.focused_tab]].mode {
+    match state.editor.windows[state.editor.open_tabs[state.editor.focused_tab]].mode {
         Mode::Normal => match event {
             Event::Key(Key::Char('i')) => {
                 actions.push(Action::Window_OrderSelections);
@@ -301,9 +246,9 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
 
     if let Err(e) = actions
         .into_iter()
-        .try_for_each(|action| do_action(&mut state.ref_(), action))
+        .try_for_each(|action| do_action(&mut state.editor, action))
     {
-        state.pending_message = Some((Importance::Error, e.to_string()));
+        state.editor.pending_message = Some((Importance::Error, e.to_string()));
     }
     Ok(())
 }
@@ -334,8 +279,12 @@ fn draw(state: &mut State) -> Result<()> {
             y: height - 1,
         },
     };
-    draw_window(state, state.open_tabs[state.focused_tab], region)?;
-    state.last_screen_height = Some(region.height());
+    draw_window(
+        state,
+        state.editor.open_tabs[state.editor.focused_tab],
+        region,
+    )?;
+    state.editor.last_screen_height = Some(region.height());
 
     let region = Rect {
         start: Point { x: 1, y: height },
@@ -352,9 +301,9 @@ fn draw(state: &mut State) -> Result<()> {
 
 fn draw_tabs(state: &mut State, region: Rect) -> Result<()> {
     write!(state.tty, "{}{}", region.start.goto(), clear::CurrentLine)?;
-    for (window_id, window) in state.windows.iter_with_handles() {
-        let buffer = &state.buffers[window.buffer];
-        if window_id == state.open_tabs[state.focused_tab] {
+    for (window_id, window) in state.editor.windows.iter_with_handles() {
+        let buffer = &state.editor.buffers[window.buffer];
+        if window_id == state.editor.open_tabs[state.editor.focused_tab] {
             write!(state.tty, "{}{}{} ", style::Bold, buffer.name, style::Reset,)?;
         } else {
             write!(state.tty, "{} ", buffer.name)?;
@@ -365,7 +314,7 @@ fn draw_tabs(state: &mut State, region: Rect) -> Result<()> {
 }
 
 fn draw_status(state: &mut State, region: Rect) -> Result<()> {
-    if let Some((_importance, message)) = state.pending_message.take() {
+    if let Some((_importance, message)) = state.editor.pending_message.take() {
         write!(
             state.tty,
             "{}{}{}{} {} {}",
@@ -377,7 +326,7 @@ fn draw_status(state: &mut State, region: Rect) -> Result<()> {
             style::Reset,
         )?;
     } else {
-        let mode = state.windows[state.open_tabs[state.focused_tab]].mode;
+        let mode = state.editor.windows[state.editor.open_tabs[state.editor.focused_tab]].mode;
         let color: &dyn Color = match mode {
             Mode::Normal => &color::White,
             Mode::Insert => &color::LightYellow,
@@ -401,7 +350,7 @@ fn draw_status(state: &mut State, region: Rect) -> Result<()> {
                 write!(
                     state.tty,
                     " :{}{} {}",
-                    state.windows[state.open_tabs[state.focused_tab]].command,
+                    state.editor.windows[state.editor.open_tabs[state.editor.focused_tab]].command,
                     style::Invert,
                     style::Reset,
                 )?;
@@ -415,7 +364,7 @@ fn draw_status(state: &mut State, region: Rect) -> Result<()> {
 
 fn draw_window(state: &mut State, window_id: WindowId, region: Rect) -> Result<()> {
     // TODO: draw a block where the next character will go in insert mode
-    let window = &mut state.windows[window_id];
+    let window = &mut state.editor.windows[window_id];
     {
         let first_visible_line = window.top;
         let last_visible_line = window.top + usize::from(region.height());
@@ -426,7 +375,7 @@ fn draw_window(state: &mut State, window_id: WindowId, region: Rect) -> Result<(
             window.top = main_selection.end.line - usize::from(region.height());
         }
     }
-    let buffer = &state.buffers[window.buffer];
+    let buffer = &state.editor.buffers[window.buffer];
     let mut lines = buffer
         .content
         .lines_at(window.top.zero_based())

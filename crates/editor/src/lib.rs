@@ -18,14 +18,55 @@ pub type WindowId = TypedHandle<Window>;
 pub type BufferId = TypedHandle<Buffer>;
 pub type SelectionId = TypedHandle<Selection>;
 
-pub struct StateRef<'a> {
-    pub windows: &'a mut TypedHandleMap<Window>,
-    pub buffers: &'a mut TypedHandleMap<Buffer>,
-    pub open_tabs: &'a mut Vec<WindowId>,
-    pub focused_tab: &'a mut usize,
-    pub last_screen_height: &'a mut Option<u16>,
-    pub pending_message: &'a mut Option<(Importance, String)>,
-    pub want_quit: &'a mut bool,
+pub struct Editor {
+    pub windows: TypedHandleMap<Window>,
+    pub buffers: TypedHandleMap<Buffer>,
+    pub open_tabs: Vec<WindowId>,
+    pub focused_tab: usize,
+    pub last_screen_height: Option<u16>,
+    pub pending_message: Option<(Importance, String)>,
+    pub want_quit: bool,
+}
+
+impl Editor {
+    pub fn new() -> Editor {
+        let mut windows = TypedHandleMap::new();
+        let mut buffers = TypedHandleMap::new();
+        let scratch_buffer = buffers.insert(Buffer {
+            content: Rope::from("\n"),
+            name: String::from("scratch"),
+            history: History::default(),
+            path: None,
+        });
+        let mut selections = TypedHandleMap::new();
+        let primary_selection = selections.insert(Selection {
+            start: Position::file_start(),
+            end: Position::file_start(),
+        });
+        let focused_window = windows.insert(Window {
+            buffer: scratch_buffer,
+            mode: Mode::Normal,
+            selections,
+            primary_selection,
+            command: String::new(),
+            top: Line::from_one_based(1),
+        });
+        Editor {
+            windows,
+            buffers,
+            open_tabs: vec![focused_window],
+            focused_tab: 0,
+            last_screen_height: None,
+            pending_message: None,
+            want_quit: false,
+        }
+    }
+}
+
+impl Default for Editor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct Window {
@@ -71,8 +112,8 @@ pub enum Importance {
     Error,
 }
 
-pub struct Context<'a, 'b> {
-    pub editor: &'a mut StateRef<'b>,
+pub struct Context<'a> {
+    pub editor: &'a mut Editor,
     pub window: WindowId,
 }
 
@@ -86,7 +127,7 @@ pub struct CommandDesc {
     pub run: fn(cx: Context, args: &[&str]) -> Result<()>,
 }
 
-pub fn run_command(state: &mut StateRef, args: &[&str]) -> Result<()> {
+pub fn run_command(state: &mut Editor, args: &[&str]) -> Result<()> {
     let name = args.first().copied().context("no command given")?;
     let cmd = COMMANDS
         .iter()
@@ -94,7 +135,7 @@ pub fn run_command(state: &mut StateRef, args: &[&str]) -> Result<()> {
         .ok_or_else(|| format_err!("command '{}' doesn't exist", name))?;
     (cmd.run)(
         Context {
-            window: state.open_tabs[*state.focused_tab],
+            window: state.open_tabs[state.focused_tab],
             editor: state,
         },
         &args[1..],
@@ -102,8 +143,8 @@ pub fn run_command(state: &mut StateRef, args: &[&str]) -> Result<()> {
 }
 
 #[allow(dead_code)]
-fn move_to(state: &mut StateRef, movement: Movement, selecting: bool) -> Result<(), MovementError> {
-    let window_id = state.open_tabs[*state.focused_tab];
+fn move_to(state: &mut Editor, movement: Movement, selecting: bool) -> Result<(), MovementError> {
+    let window_id = state.open_tabs[state.focused_tab];
     let window = &mut state.windows[window_id];
     let buffer = &mut state.buffers[window.buffer];
     for selection in window.selections.iter_mut() {
@@ -142,22 +183,22 @@ pub enum Action {
     Command_Backspace,
 }
 
-pub fn do_action(state: &mut StateRef, action: Action) -> Result<()> {
+pub fn do_action(state: &mut Editor, action: Action) -> Result<()> {
     match action {
         Action::Editor_PreviousTab => {
-            *state.focused_tab = (*state.focused_tab - 1) % state.open_tabs.len();
+            state.focused_tab = (state.focused_tab - 1) % state.open_tabs.len();
             Ok(())
         }
         Action::Editor_NextTab => {
-            *state.focused_tab = (*state.focused_tab + 1) % state.open_tabs.len();
+            state.focused_tab = (state.focused_tab + 1) % state.open_tabs.len();
             Ok(())
         }
         Action::Buffer_Undo => {
-            undo(state, state.open_tabs[*state.focused_tab]);
+            undo(state, state.open_tabs[state.focused_tab]);
             Ok(())
         }
         Action::Buffer_Redo => {
-            redo(state, state.open_tabs[*state.focused_tab]);
+            redo(state, state.open_tabs[state.focused_tab]);
             Ok(())
         }
         action @ (Action::Window_InsertAtSelectionStart(_)
@@ -171,7 +212,7 @@ pub fn do_action(state: &mut StateRef, action: Action) -> Result<()> {
         | Action::Window_ScrollHalfPageUp
         | Action::Window_ScrollHalfPageDown
         | Action::Window_OrderSelections) => {
-            let window_id = state.open_tabs[*state.focused_tab];
+            let window_id = state.open_tabs[state.focused_tab];
             let window = &mut state.windows[window_id];
             let buffer = &mut state.buffers[window.buffer];
             for selection in window.selections.iter_mut() {
@@ -200,7 +241,7 @@ pub fn do_action(state: &mut StateRef, action: Action) -> Result<()> {
                     | Action::Window_ScrollHalfPageUp
                     | Action::Window_ScrollHalfPageDown => {
                         if let Some(height) = state.last_screen_height {
-                            let height = usize::from(*height);
+                            let height = usize::from(height);
                             let movement = match action {
                                 Action::Window_ScrollPageUp => Movement::Up(height),
                                 Action::Window_ScrollPageDown => Movement::Down(height),
@@ -232,17 +273,17 @@ pub fn do_action(state: &mut StateRef, action: Action) -> Result<()> {
             Ok(())
         }
         Action::Window_SwitchToMode(mode) => {
-            state.windows[state.open_tabs[*state.focused_tab]].mode = mode;
+            state.windows[state.open_tabs[state.focused_tab]].mode = mode;
             Ok(())
         }
         Action::Command_Character(c) => {
-            state.windows[state.open_tabs[*state.focused_tab]]
+            state.windows[state.open_tabs[state.focused_tab]]
                 .command
                 .push(c);
             Ok(())
         }
         Action::Command_Clear => {
-            state.windows[state.open_tabs[*state.focused_tab]]
+            state.windows[state.open_tabs[state.focused_tab]]
                 .command
                 .clear();
             Ok(())
@@ -252,8 +293,8 @@ pub fn do_action(state: &mut StateRef, action: Action) -> Result<()> {
             Ok(())
         }
         Action::Command_Return => {
-            let command = take(&mut state.windows[state.open_tabs[*state.focused_tab]].command);
-            state.windows[state.open_tabs[*state.focused_tab]].mode = Mode::Normal;
+            let command = take(&mut state.windows[state.open_tabs[state.focused_tab]].command);
+            state.windows[state.open_tabs[state.focused_tab]].mode = Mode::Normal;
             let command = shlex(&command)
                 .ok_or_else(|| format_err!("failed to parse command '{}'", command))?;
             trace!("command: {:?}", command);
@@ -262,33 +303,33 @@ pub fn do_action(state: &mut StateRef, action: Action) -> Result<()> {
             Ok(())
         }
         Action::Command_Backspace => {
-            if state.windows[state.open_tabs[*state.focused_tab]]
+            if state.windows[state.open_tabs[state.focused_tab]]
                 .command
                 .pop()
                 .is_none()
             {
                 let mode: Mode = Mode::Normal;
-                state.windows[state.open_tabs[*state.focused_tab]].mode = mode;
+                state.windows[state.open_tabs[state.focused_tab]].mode = mode;
             }
             Ok(())
         }
     }
 }
 
-pub fn show_message(state: &mut StateRef, importance: Importance, message: String) {
-    *state.pending_message = Some((importance, message));
+pub fn show_message(state: &mut Editor, importance: Importance, message: String) {
+    state.pending_message = Some((importance, message));
 }
 
-pub fn quit(state: &mut StateRef) {
-    *state.want_quit = true;
+pub fn quit(state: &mut Editor) {
+    state.want_quit = true;
 }
 
-pub fn undo(state: &mut StateRef, window_id: WindowId) {
+pub fn undo(state: &mut Editor, window_id: WindowId) {
     let window = &mut state.windows[window_id];
     let buffer = &mut state.buffers[window.buffer];
     match buffer.history.undo(&mut buffer.content) {
         Ok(()) => {
-            let window_id = state.open_tabs[*state.focused_tab];
+            let window_id = state.open_tabs[state.focused_tab];
             let window = &mut state.windows[window_id];
             let buffer = &mut state.buffers[window.buffer];
             for selection in window.selections.iter_mut() {
@@ -301,7 +342,7 @@ pub fn undo(state: &mut StateRef, window_id: WindowId) {
     }
 }
 
-pub fn redo(_state: &mut StateRef, _window_id: WindowId) {
+pub fn redo(_state: &mut Editor, _window_id: WindowId) {
     todo!()
 }
 
@@ -386,7 +427,7 @@ const COMMANDS: &[CommandDesc] = &[
             };
             let focused_tab = cx.editor.open_tabs.len();
             cx.editor.open_tabs.push(cx.editor.windows.insert(window));
-            *cx.editor.focused_tab = focused_tab;
+            cx.editor.focused_tab = focused_tab;
             Ok(())
         },
     },

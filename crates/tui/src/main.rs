@@ -4,8 +4,8 @@ use anyhow::Result;
 use crossbeam_channel::{select, unbounded, Receiver};
 use editor::location::{Column, Line, Movement, Position};
 use editor::{
-    do_action, show_message, Action, BufferAction, CommandAction, Editor, EditorAction, Importance,
-    Mode, WindowAction, WindowId,
+    do_action, show_message, Action, BufferAction, CommandAction, EditorAction, EditorData,
+    Importance, Mode, WindowAction, WindowId,
 };
 use log::{error, info, trace};
 use signal_hook::{iterator::Signals, SIGWINCH};
@@ -28,7 +28,7 @@ use termion::{
 };
 
 pub struct State {
-    pub editor: Editor,
+    pub editor: EditorData,
     pub signals: Receiver<c_int>,
     pub inputs: Receiver<io::Result<Event>>,
     pub tty: RawTerminal<File>,
@@ -66,7 +66,7 @@ fn main() -> Result<()> {
             }
         });
         State {
-            editor: Editor::new(),
+            editor: EditorData::new(),
             signals: signal,
             inputs: input,
             tty: get_tty()?.into_raw_mode()?,

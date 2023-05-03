@@ -14,13 +14,13 @@ use std::{
     path::PathBuf,
 };
 
-pub type WindowId = TypedHandle<Window>;
-pub type BufferId = TypedHandle<Buffer>;
+pub type WindowId = TypedHandle<WindowData>;
+pub type BufferId = TypedHandle<BufferData>;
 pub type SelectionId = TypedHandle<Selection>;
 
-pub struct Editor {
-    pub windows: TypedHandleMap<Window>,
-    pub buffers: TypedHandleMap<Buffer>,
+pub struct EditorData {
+    pub windows: TypedHandleMap<WindowData>,
+    pub buffers: TypedHandleMap<BufferData>,
     pub open_tabs: Vec<WindowId>,
     pub focused_tab: usize,
     pub last_screen_height: Option<u16>,
@@ -28,48 +28,7 @@ pub struct Editor {
     pub want_quit: bool,
 }
 
-impl Editor {
-    pub fn new() -> Editor {
-        let mut windows = TypedHandleMap::new();
-        let mut buffers = TypedHandleMap::new();
-        let scratch_buffer = buffers.insert(Buffer {
-            content: Rope::from("\n"),
-            name: String::from("scratch"),
-            history: History::default(),
-            path: None,
-        });
-        let mut selections = TypedHandleMap::new();
-        let primary_selection = selections.insert(Selection {
-            start: Position::file_start(),
-            end: Position::file_start(),
-        });
-        let focused_window = windows.insert(Window {
-            buffer: scratch_buffer,
-            mode: Mode::Normal,
-            selections,
-            primary_selection,
-            command: String::new(),
-            top: Line::from_one_based(1),
-        });
-        Editor {
-            windows,
-            buffers,
-            open_tabs: vec![focused_window],
-            focused_tab: 0,
-            last_screen_height: None,
-            pending_message: None,
-            want_quit: false,
-        }
-    }
-}
-
-impl Default for Editor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-pub struct Window {
+pub struct WindowData {
     pub buffer: BufferId,
     pub mode: Mode,
     pub selections: TypedHandleMap<Selection>,
@@ -78,7 +37,7 @@ pub struct Window {
     pub top: Line,
 }
 
-pub struct Buffer {
+pub struct BufferData {
     pub path: Option<PathBuf>,
     pub name: String,
     pub content: Rope,
@@ -113,7 +72,7 @@ pub enum Importance {
 }
 
 pub struct Context<'a> {
-    pub editor: &'a mut Editor,
+    pub editor: &'a mut EditorData,
     pub window: WindowId,
 }
 
@@ -125,32 +84,6 @@ pub struct CommandDesc {
     #[allow(dead_code)]
     pub required_arguments: usize,
     pub run: fn(cx: Context, args: &[&str]) -> Result<()>,
-}
-
-pub fn run_command(state: &mut Editor, args: &[&str]) -> Result<()> {
-    let name = args.first().copied().context("no command given")?;
-    let cmd = COMMANDS
-        .iter()
-        .find(|desc| desc.name == name || desc.aliases.contains(&name))
-        .ok_or_else(|| format_err!("command '{}' doesn't exist", name))?;
-    (cmd.run)(
-        Context {
-            window: state.open_tabs[state.focused_tab],
-            editor: state,
-        },
-        &args[1..],
-    )
-}
-
-#[allow(dead_code)]
-fn move_to(state: &mut Editor, movement: Movement, selecting: bool) -> Result<(), MovementError> {
-    let window_id = state.open_tabs[state.focused_tab];
-    let window = &mut state.windows[window_id];
-    let buffer = &mut state.buffers[window.buffer];
-    for selection in window.selections.iter_mut() {
-        selection.move_to(&buffer.content, movement, selecting)?
-    }
-    Ok(())
 }
 
 #[allow(non_camel_case_types)]
@@ -199,7 +132,78 @@ pub enum CommandAction {
     Backspace,
 }
 
-pub fn do_action(state: &mut Editor, action: Action) -> Result<()> {
+impl EditorData {
+    pub fn new() -> EditorData {
+        let mut windows = TypedHandleMap::new();
+        let mut buffers = TypedHandleMap::new();
+        let scratch_buffer = buffers.insert(BufferData {
+            content: Rope::from("\n"),
+            name: String::from("scratch"),
+            history: History::default(),
+            path: None,
+        });
+        let mut selections = TypedHandleMap::new();
+        let primary_selection = selections.insert(Selection {
+            start: Position::file_start(),
+            end: Position::file_start(),
+        });
+        let focused_window = windows.insert(WindowData {
+            buffer: scratch_buffer,
+            mode: Mode::Normal,
+            selections,
+            primary_selection,
+            command: String::new(),
+            top: Line::from_one_based(1),
+        });
+        EditorData {
+            windows,
+            buffers,
+            open_tabs: vec![focused_window],
+            focused_tab: 0,
+            last_screen_height: None,
+            pending_message: None,
+            want_quit: false,
+        }
+    }
+}
+
+impl Default for EditorData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn run_command(state: &mut EditorData, args: &[&str]) -> Result<()> {
+    let name = args.first().copied().context("no command given")?;
+    let cmd = COMMANDS
+        .iter()
+        .find(|desc| desc.name == name || desc.aliases.contains(&name))
+        .ok_or_else(|| format_err!("command '{}' doesn't exist", name))?;
+    (cmd.run)(
+        Context {
+            window: state.open_tabs[state.focused_tab],
+            editor: state,
+        },
+        &args[1..],
+    )
+}
+
+#[allow(dead_code)]
+fn move_to(
+    state: &mut EditorData,
+    movement: Movement,
+    selecting: bool,
+) -> Result<(), MovementError> {
+    let window_id = state.open_tabs[state.focused_tab];
+    let window = &mut state.windows[window_id];
+    let buffer = &mut state.buffers[window.buffer];
+    for selection in window.selections.iter_mut() {
+        selection.move_to(&buffer.content, movement, selecting)?
+    }
+    Ok(())
+}
+
+pub fn do_action(state: &mut EditorData, action: Action) -> Result<()> {
     match action {
         Action::Editor(EditorAction::PreviousTab) => {
             state.focused_tab = (state.focused_tab - 1) % state.open_tabs.len();
@@ -334,15 +338,15 @@ pub fn do_action(state: &mut Editor, action: Action) -> Result<()> {
     }
 }
 
-pub fn show_message(state: &mut Editor, importance: Importance, message: String) {
+pub fn show_message(state: &mut EditorData, importance: Importance, message: String) {
     state.pending_message = Some((importance, message));
 }
 
-pub fn quit(state: &mut Editor) {
+pub fn quit(state: &mut EditorData) {
     state.want_quit = true;
 }
 
-pub fn undo(state: &mut Editor, window_id: WindowId) {
+pub fn undo(state: &mut EditorData, window_id: WindowId) {
     let window = &mut state.windows[window_id];
     let buffer = &mut state.buffers[window.buffer];
     match buffer.history.undo(&mut buffer.content) {
@@ -360,7 +364,7 @@ pub fn undo(state: &mut Editor, window_id: WindowId) {
     }
 }
 
-pub fn redo(_state: &mut Editor, _window_id: WindowId) {
+pub fn redo(_state: &mut EditorData, _window_id: WindowId) {
     todo!()
 }
 
@@ -423,7 +427,7 @@ const COMMANDS: &[CommandDesc] = &[
             let name = String::from(args[0]);
             let path = PathBuf::from(&name).canonicalize()?;
             let reader = File::open(&path)?;
-            let buffer = Buffer {
+            let buffer = BufferData {
                 path: Some(path),
                 name,
                 content: Rope::from_reader(reader)?,
@@ -435,7 +439,7 @@ const COMMANDS: &[CommandDesc] = &[
                 start: Position::file_start(),
                 end: Position::file_start(),
             });
-            let window = Window {
+            let window = WindowData {
                 buffer: buffer_id,
                 command: String::new(),
                 mode: Mode::Normal,

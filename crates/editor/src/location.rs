@@ -1,4 +1,4 @@
-use crate::Buffer;
+use crate::BufferData;
 use ropey::{Rope, RopeSlice};
 use std::{
     mem::swap,
@@ -93,7 +93,7 @@ impl Line {
     }
 
     #[allow(dead_code)]
-    pub fn remove_from(self, _buffer: &mut Buffer) {
+    pub fn remove_from(self, _buffer: &mut BufferData) {
         todo!()
     }
 
@@ -148,7 +148,7 @@ impl Position {
         self.line.slice_of(rope).len_chars() == self.column.zero_based()
     }
 
-    pub fn insert_char(self, buffer: &mut Buffer, c: char) {
+    pub fn insert_char(self, buffer: &mut BufferData, c: char) {
         buffer.history.insert_char(&mut buffer.content, self, c);
     }
 
@@ -170,7 +170,7 @@ impl Position {
         }
     }
 
-    pub fn validate_fix(&mut self, buffer: &mut Buffer) {
+    pub fn validate_fix(&mut self, buffer: &mut BufferData) {
         if !self.is_valid(&buffer.content) {
             if self.line.is_empty(&buffer.content) {
                 if !self.line.is_first() {
@@ -348,12 +348,12 @@ impl Selection {
         self.end.validate(rope);
     }
 
-    pub fn validate_fix(&mut self, buffer: &mut Buffer) {
+    pub fn validate_fix(&mut self, buffer: &mut BufferData) {
         self.start.validate_fix(buffer);
         self.end.validate_fix(buffer);
     }
 
-    pub fn remove_from(&mut self, buffer: &mut Buffer) {
+    pub fn remove_from(&mut self, buffer: &mut BufferData) {
         self.validate(&buffer.content);
         self.order();
         buffer.history.remove_selection(&mut buffer.content, *self);

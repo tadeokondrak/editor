@@ -10,7 +10,6 @@ use editor::{
 use log::{error, info, trace};
 use signal_hook::{iterator::Signals, SIGWINCH};
 use std::{
-    fs::File,
     io::{self, Write as _},
     os::raw::c_int,
     thread,
@@ -19,21 +18,41 @@ use terminal::{Point, Rect};
 use termion::{
     clear,
     color::{self, Color},
-    cursor,
-    event::{Event, Key},
-    get_tty,
-    input::TermRead,
-    raw::{IntoRawMode, RawTerminal},
-    screen, style, terminal_size,
+    cursor, screen, style, terminal_size,
 };
+use textmode::blocking::{Input, RawGuard};
+use textmode::Key;
+use textmode::{blocking::Output, Textmode};
+
+pub struct Tty(Output);
+
+impl Tty {
+    fn new() -> Result<Tty, textmode::Error> {
+        Output::new().map(Tty)
+    }
+}
+
+impl io::Write for Tty {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0
+            .refresh()
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+    }
+}
 
 pub struct State {
     pub editor: EditorData,
     pub signals: Receiver<c_int>,
-    pub inputs: Receiver<io::Result<Event>>,
-    pub tty: RawTerminal<File>,
+    pub inputs: Receiver<Result<textmode::Key, textmode::Error>>,
+    pub tty: Tty,
     pub tabline_needs_redraw: bool,
     pub statusline_needs_redraw: bool,
+    pub _raw_guard: RawGuard,
 }
 
 impl Drop for State {
@@ -51,27 +70,29 @@ impl Drop for State {
 fn main() -> Result<()> {
     env_logger::init();
     let mut state = {
-        let (signals, signal) = unbounded();
-        let (inputs, input) = unbounded();
+        let (signal_s, signal_r) = unbounded();
+        let (input_s, input_r) = unbounded();
         let signal_iter = Signals::new([SIGWINCH])?;
         thread::spawn(move || {
             for signal in signal_iter.forever() {
-                signals.send(signal).unwrap();
+                signal_s.send(signal).unwrap();
             }
         });
-        let tty = get_tty()?;
+        let mut input = Input::new()?;
+        let raw_guard = input.take_raw_guard().unwrap();
         thread::spawn(move || {
-            for event in tty.events() {
-                inputs.send(event).unwrap();
+            while let Some(result) = input.read_key().transpose() {
+                input_s.send(result).unwrap();
             }
         });
         State {
             editor: EditorData::new(),
-            signals: signal,
-            inputs: input,
-            tty: get_tty()?.into_raw_mode()?,
+            signals: signal_r,
+            inputs: input_r,
+            tty: Tty::new()?,
             tabline_needs_redraw: true,
             statusline_needs_redraw: true,
+            _raw_guard: raw_guard,
         }
     };
     fn handle_next_event(state: &mut State) -> Result<()> {
@@ -98,8 +119,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn handle_event(state: &mut State, event: Event) -> Result<()> {
-    trace!("event: {:?}", event);
+fn handle_event(state: &mut State, key: textmode::Key) -> Result<()> {
+    trace!("event: {:?}", key);
 
     const SHIFT_UP: &[u8] = &[27, 91, 49, 59, 50, 65];
     const SHIFT_DOWN: &[u8] = &[27, 91, 49, 59, 50, 66];
@@ -111,40 +132,24 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
     if let Mode::Normal | Mode::Insert | Mode::Append =
         state.editor.windows[state.editor.open_tabs[state.editor.focused_tab]].mode
     {
-        match &event {
-            Event::Key(Key::Left) => {
-                actions.push(Action::Window(WindowAction::Move(Movement::Left(1))))
-            }
-            Event::Key(Key::Down) => {
-                actions.push(Action::Window(WindowAction::Move(Movement::Down(1))))
-            }
-            Event::Key(Key::Up) => {
-                actions.push(Action::Window(WindowAction::Move(Movement::Up(1))))
-            }
-            Event::Key(Key::Right) => {
-                actions.push(Action::Window(WindowAction::Move(Movement::Right(1))))
-            }
-            Event::Key(Key::Ctrl('u')) => {
-                actions.push(Action::Window(WindowAction::ScrollHalfPageUp))
-            }
-            Event::Key(Key::Ctrl('d')) => {
-                actions.push(Action::Window(WindowAction::ScrollHalfPageDown))
-            }
-            Event::Key(Key::Home) => {
-                actions.push(Action::Window(WindowAction::Move(Movement::LineStart)))
-            }
-            Event::Key(Key::End) => {
-                actions.push(Action::Window(WindowAction::Move(Movement::LineEnd)))
-            }
-            Event::Key(Key::Ctrl('b') | Key::PageUp) => {
+        match &key {
+            Key::Left => actions.push(Action::Window(WindowAction::Move(Movement::Left(1)))),
+            Key::Down => actions.push(Action::Window(WindowAction::Move(Movement::Down(1)))),
+            Key::Up => actions.push(Action::Window(WindowAction::Move(Movement::Up(1)))),
+            Key::Right => actions.push(Action::Window(WindowAction::Move(Movement::Right(1)))),
+            Key::Ctrl(b'u') => actions.push(Action::Window(WindowAction::ScrollHalfPageUp)),
+            Key::Ctrl(b'd') => actions.push(Action::Window(WindowAction::ScrollHalfPageDown)),
+            Key::Home => actions.push(Action::Window(WindowAction::Move(Movement::LineStart))),
+            Key::End => actions.push(Action::Window(WindowAction::Move(Movement::LineEnd))),
+            Key::Ctrl(b'b') | Key::PageUp => {
                 actions.push(Action::Window(WindowAction::ScrollPageUp));
             }
-            Event::Key(Key::Ctrl('f') | Key::PageDown) => {
+            Key::Ctrl(b'f') | Key::PageDown => {
                 actions.push(Action::Window(WindowAction::ScrollPageDown));
             }
-            Event::Key(Key::Ctrl('p')) => actions.push(Action::Editor(EditorAction::PreviousTab)),
-            Event::Key(Key::Ctrl('n')) => actions.push(Action::Editor(EditorAction::NextTab)),
-            Event::Unsupported(keys) => match keys.as_slice() {
+            Key::Ctrl(b'p') => actions.push(Action::Editor(EditorAction::PreviousTab)),
+            Key::Ctrl(b'n') => actions.push(Action::Editor(EditorAction::NextTab)),
+            Key::Bytes(keys) => match keys.as_slice() {
                 SHIFT_LEFT => {
                     actions.push(Action::Window(WindowAction::ShiftEnd(Movement::Left(1))))
                 }
@@ -162,77 +167,67 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
     }
 
     match state.editor.windows[state.editor.open_tabs[state.editor.focused_tab]].mode {
-        Mode::Normal => match event {
-            Event::Key(Key::Char('i')) => {
+        Mode::Normal => match key {
+            Key::Char('i') => {
                 actions.push(Action::Window(WindowAction::OrderSelections));
                 actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Insert)));
             }
-            Event::Key(Key::Char('c')) => {
+            Key::Char('c') => {
                 actions.push(Action::Window(WindowAction::Delete));
                 actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Insert)));
             }
-            Event::Key(Key::Char('a')) => {
+            Key::Char('a') => {
                 actions.push(Action::Window(WindowAction::OrderSelections));
                 actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Append)));
             }
-            Event::Key(Key::Char('A')) => {
+            Key::Char('A') => {
                 actions.push(Action::Window(WindowAction::Move(Movement::LineEnd)));
                 actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Insert)));
             }
-            Event::Key(Key::Char('o')) => {
+            Key::Char('o') => {
                 actions.push(Action::Window(WindowAction::Move(Movement::LineEnd)));
                 actions.push(Action::Window(WindowAction::InsertAtSelectionEnd('\n')));
                 actions.push(Action::Window(WindowAction::Move(Movement::Down(1))));
                 actions.push(Action::Window(WindowAction::Move(Movement::LineStart)));
                 actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Insert)));
             }
-            Event::Key(Key::Char('x')) => {
+            Key::Char('x') => {
                 //self.move_selections(self.focused, Movement::Line, false)?;
             }
-            Event::Key(Key::Char('X')) => {
+            Key::Char('X') => {
                 //self.move_selections(self.focused, Movement::Line, true)?;
             }
-            // Event::Key(Key::Char('C'))
-            Event::Key(Key::Char('g')) => {
+            // Key::Char('C')
+            Key::Char('g') => {
                 actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Goto {
                     selecting: false,
                 })));
             }
-            Event::Key(Key::Char('G')) => {
+            Key::Char('G') => {
                 actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Goto {
                     selecting: true,
                 })));
             }
-            Event::Key(Key::Char(':')) => {
+            Key::Char(':') => {
                 actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Command)))
             }
-            Event::Key(Key::Char('h')) => {
-                actions.push(Action::Window(WindowAction::Move(Movement::Left(1))))
-            }
-            Event::Key(Key::Char('j')) => {
-                actions.push(Action::Window(WindowAction::Move(Movement::Down(1))))
-            }
-            Event::Key(Key::Char('k')) => {
-                actions.push(Action::Window(WindowAction::Move(Movement::Up(1))))
-            }
-            Event::Key(Key::Char('l')) => {
-                actions.push(Action::Window(WindowAction::Move(Movement::Right(1))))
-            }
-            Event::Key(Key::Char('H')) => {
+            Key::Char('h') => actions.push(Action::Window(WindowAction::Move(Movement::Left(1)))),
+            Key::Char('j') => actions.push(Action::Window(WindowAction::Move(Movement::Down(1)))),
+            Key::Char('k') => actions.push(Action::Window(WindowAction::Move(Movement::Up(1)))),
+            Key::Char('l') => actions.push(Action::Window(WindowAction::Move(Movement::Right(1)))),
+            Key::Char('H') => {
                 actions.push(Action::Window(WindowAction::ShiftEnd(Movement::Left(1))))
             }
-            Event::Key(Key::Char('J')) => {
+            Key::Char('J') => {
                 actions.push(Action::Window(WindowAction::ShiftEnd(Movement::Down(1))))
             }
-            Event::Key(Key::Char('K')) => {
-                actions.push(Action::Window(WindowAction::ShiftEnd(Movement::Up(1))))
-            }
-            Event::Key(Key::Char('L')) => {
+            Key::Char('K') => actions.push(Action::Window(WindowAction::ShiftEnd(Movement::Up(1)))),
+            Key::Char('L') => {
                 actions.push(Action::Window(WindowAction::ShiftEnd(Movement::Right(1))))
             }
-            Event::Key(Key::Char('d')) => actions.push(Action::Window(WindowAction::Delete)),
-            Event::Key(Key::Char('u')) => actions.push(Action::Buffer(BufferAction::Undo)),
-            Event::Key(Key::Char('U')) => actions.push(Action::Buffer(BufferAction::Redo)),
+            Key::Char('d') => actions.push(Action::Window(WindowAction::Delete)),
+            Key::Char('u') => actions.push(Action::Buffer(BufferAction::Undo)),
+            Key::Char('U') => actions.push(Action::Buffer(BufferAction::Redo)),
             _ => {}
         },
         Mode::Goto { selecting } => {
@@ -243,11 +238,11 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
                     Action::Window(WindowAction::Move(m))
                 }
             };
-            let movement = match event {
-                Event::Key(Key::Char('h')) => Some(Movement::LineStart),
-                Event::Key(Key::Char('j')) => Some(Movement::FileEnd),
-                Event::Key(Key::Char('k')) => Some(Movement::FileStart),
-                Event::Key(Key::Char('l')) => Some(Movement::LineEnd),
+            let movement = match key {
+                Key::Char('h') => Some(Movement::LineStart),
+                Key::Char('j') => Some(Movement::FileEnd),
+                Key::Char('k') => Some(Movement::FileStart),
+                Key::Char('l') => Some(Movement::LineEnd),
                 _ => None,
             };
             if let Some(movement) = movement {
@@ -255,11 +250,9 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
             }
             actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Normal)))
         }
-        mode @ Mode::Insert | mode @ Mode::Append => match event {
-            Event::Key(Key::Esc) => {
-                actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Normal)))
-            }
-            Event::Key(Key::Char(c)) => match mode {
+        mode @ Mode::Insert | mode @ Mode::Append => match key {
+            Key::Escape => actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Normal))),
+            Key::Char(c) => match mode {
                 Mode::Insert => {
                     actions.push(Action::Window(WindowAction::InsertAtSelectionStart(c)));
                     actions.push(Action::Window(WindowAction::ShiftStart(Movement::Right(1))));
@@ -271,21 +264,23 @@ fn handle_event(state: &mut State, event: Event) -> Result<()> {
                 }
                 _ => unreachable!(),
             },
-            Event::Key(Key::Backspace) => {
+            Key::Backspace => {
                 actions.push(Action::Window(WindowAction::Move(Movement::Left(1))));
                 actions.push(Action::Window(WindowAction::Delete));
             }
             _ => {}
         },
-        Mode::Command => match event {
-            Event::Key(Key::Esc) => {
+        Mode::Command => match key {
+            Key::Escape => {
                 actions.push(Action::Command(CommandAction::Clear));
                 actions.push(Action::Window(WindowAction::SwitchToMode(Mode::Normal)));
             }
-            Event::Key(Key::Char('\t')) => actions.push(Action::Command(CommandAction::Tab)),
-            Event::Key(Key::Char('\n')) => actions.push(Action::Command(CommandAction::Return)),
-            Event::Key(Key::Char(c)) => actions.push(Action::Command(CommandAction::Character(c))),
-            Event::Key(Key::Backspace) => actions.push(Action::Command(CommandAction::Backspace)),
+            Key::Char('\t') => actions.push(Action::Command(CommandAction::Tab)),
+            Key::Ctrl(b'm') | Key::Char('\n') => {
+                actions.push(Action::Command(CommandAction::Return))
+            }
+            Key::Char(c) => actions.push(Action::Command(CommandAction::Character(c))),
+            Key::Backspace => actions.push(Action::Command(CommandAction::Backspace)),
             _ => {}
         },
     }

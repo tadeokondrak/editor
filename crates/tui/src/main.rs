@@ -408,12 +408,12 @@ fn draw_window(state: &mut State, window_id: WindowId, region: Rect) -> Result<(
     let window = &mut state.editor.windows[window_id];
     {
         let first_visible_line = window.top;
-        let last_visible_line = window.top + usize::from(region.height());
+        let last_visible_line = window.top.0 + usize::from(region.height());
         let main_selection = window.selections[window.primary_selection];
         if main_selection.end.line < first_visible_line {
             window.top = main_selection.end.line;
-        } else if main_selection.end.line > last_visible_line {
-            window.top = main_selection.end.line - usize::from(region.height());
+        } else if main_selection.end.line.0 > last_visible_line {
+            window.top = LineIndex(main_selection.end.line.0 - usize::from(region.height()));
         }
     }
     let buffer = &state.editor.buffers[window.buffer];

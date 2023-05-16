@@ -1,10 +1,6 @@
 use crate::BufferData;
 use ropey::{Rope, RopeSlice};
-use std::{
-    mem::swap,
-    num::NonZeroUsize,
-    ops::{Add, AddAssign, Range, Sub, SubAssign},
-};
+use std::{mem::swap, ops::Range};
 use thiserror::Error;
 
 macro_rules! newtype_impl {
@@ -15,7 +11,7 @@ macro_rules! newtype_impl {
             }
 
             pub fn from_one_based(i: usize) -> Self {
-                Self(NonZeroUsize::new(i).unwrap())
+                Self(i)
             }
 
             pub fn zero_based(self) -> usize {
@@ -23,58 +19,14 @@ macro_rules! newtype_impl {
             }
 
             pub fn one_based(self) -> usize {
-                self.0.get()
-            }
-        }
-
-        impl<T> Add<T> for $type
-        where
-            usize: Add<T>,
-            <usize as Add<T>>::Output: Into<usize>,
-        {
-            type Output = Self;
-            fn add(self, other: T) -> Self {
-                Self::from_one_based(self.one_based().add(other.into()).into())
-            }
-        }
-
-        impl<T> AddAssign<T> for $type
-        where
-            usize: AddAssign<T>,
-        {
-            fn add_assign(&mut self, other: T) {
-                let mut this = self.one_based();
-                this.add_assign(other);
-                *self = Self::from_one_based(this);
-            }
-        }
-
-        impl<T> Sub<T> for $type
-        where
-            usize: Sub<T>,
-            <usize as Sub<T>>::Output: Into<usize>,
-        {
-            type Output = Self;
-            fn sub(self, other: T) -> Self {
-                Self::from_one_based(self.one_based().sub(other.into()).into())
-            }
-        }
-
-        impl<T> SubAssign<T> for $type
-        where
-            usize: SubAssign<T>,
-        {
-            fn sub_assign(&mut self, other: T) {
-                let mut this = self.one_based();
-                this.sub_assign(other);
-                *self = Self::from_one_based(this);
+                self.0
             }
         }
     };
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct LineIndex(NonZeroUsize);
+pub struct LineIndex(pub usize);
 
 newtype_impl!(LineIndex);
 
@@ -111,7 +63,7 @@ impl LineIndex {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-pub struct ColumnIndex(NonZeroUsize);
+pub struct ColumnIndex(pub usize);
 
 newtype_impl!(ColumnIndex);
 
@@ -207,7 +159,7 @@ impl Position {
                             return Err(MovementError::NoPrevLine);
                         }
                     } else {
-                        self.column -= 1;
+                        self.column.0 -= 1;
                         moved = true;
                     }
                 }
@@ -228,7 +180,7 @@ impl Position {
                         self.move_to(rope, Movement::LineStart)?;
                         moved = true;
                     } else {
-                        self.column += 1;
+                        self.column.0 += 1;
                         moved = true;
                     }
                 }
@@ -244,7 +196,7 @@ impl Position {
                 if n == 0 {
                     return Err(MovementError::NoPrevLine);
                 }
-                self.line -= n;
+                self.line.0 -= n;
             }
             Movement::Down(n) => {
                 if n == 0 {
@@ -253,8 +205,10 @@ impl Position {
                 // TODO: remove the loop
                 let mut moved = false;
                 for _ in 0..n {
-                    if !self.line.is_last(rope) && (self.line + 1).slice_of(rope).len_chars() > 0 {
-                        self.line += 1;
+                    if !self.line.is_last(rope)
+                        && LineIndex(self.line.0 + 1).slice_of(rope).len_chars() > 0
+                    {
+                        self.line.0 += 1;
                         moved = true;
                     } else {
                         break;
@@ -279,7 +233,7 @@ impl Position {
                 if !last.is_empty(rope) {
                     self.line = last;
                 } else {
-                    self.line = last - 1;
+                    self.line = LineIndex(last.0 - 1);
                 }
                 self.move_to(rope, Movement::LineStart)?;
             }

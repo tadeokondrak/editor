@@ -1,17 +1,15 @@
 [package]
-name = "tui"
+name = "gui"
 version = "0.0.0"
 edition = "2021"
 
 [dependencies]
 editor = { workspace = true }
 anyhow = "1.0.71"
-termion = "1.5.5"
 thiserror = "1.0"
 signal-hook = "0.1.13"
 crossbeam-channel = "0.4.2"
 log = "0.4.8"
-textmode = "0.4.0"
 
 [dependencies.env_logger]
 version = "0.7.1"
